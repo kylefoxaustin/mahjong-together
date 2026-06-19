@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from "react";
 import { Volume2, VolumeX, Mic, HelpCircle, RotateCcw, ArrowRight, BadgeCheck } from "lucide-react";
-import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, pickAssistedDrawIndex, shuffle, coachFacts, chooseDiscard } from "@/lib/tiles";
+import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, pickAssistedDrawIndex, shuffle, coachFacts, chooseDiscard, decomposeWin } from "@/lib/tiles";
 import { buildSystemPrompt, callCoach } from "@/lib/coach";
 
 // Where the in-progress game is auto-saved on her device (localStorage). Bump
@@ -117,7 +117,7 @@ function useSpeech() {
   return { speak, stop };
 }
 
-function Tile({ tile, onClick, selected, dim, small, draggable, dragging, fill, onPointerDown, onPointerMove, onPointerUp }) {
+function Tile({ tile, onClick, selected, dim, small, draggable, dragging, fill, highlight, onPointerDown, onPointerMove, onPointerUp }) {
   // Rack-friendly tile. Glyph and number/suit live in their OWN fixed regions
   // (top vs. bottom) so they can never overlap, and the glyph region clips so
   // the image can't spill. The number is the reliable read for low vision.
@@ -141,8 +141,11 @@ function Tile({ tile, onClick, selected, dim, small, draggable, dragging, fill, 
           ? "cursor-pointer hover:-translate-y-1 focus:-translate-y-1 motion-reduce:hover:translate-y-0 motion-reduce:focus:translate-y-0 focus:outline-none focus:ring-4 focus:ring-red-400"
           : "cursor-default"}
         ${draggable ? "touch-none" : ""}
-        ${dragging ? "opacity-80 ring-4 ring-amber-400 scale-105 shadow-xl z-10" : ""}
-        ${selected ? "border-red-600 ring-4 ring-red-300 -translate-y-1 motion-reduce:translate-y-0" : "border-stone-400"}
+        ${dragging ? "opacity-80 scale-105 shadow-xl z-10" : ""}
+        ${dragging ? "border-amber-500 ring-4 ring-amber-400"
+          : selected ? "border-red-600 ring-4 ring-red-300 -translate-y-1 motion-reduce:translate-y-0"
+          : highlight ? "border-yellow-500 ring-4 ring-yellow-300 -translate-y-1 motion-reduce:translate-y-0"
+          : "border-stone-400"}
         ${dim ? "opacity-70" : ""}`}
       style={fill ? { flex: "1 1 0", minWidth: 62, maxWidth: 104, height: h } : { width: w, height: h }}
     >
@@ -190,6 +193,7 @@ export default function MahjongCoach() {
   const [hand, setHand] = useState([]);
   const [exposed, setExposed] = useState([]);
   const [selected, setSelected] = useState([]);
+  const [highlightIds, setHighlightIds] = useState([]); // tiles the coach just mentioned — lit up in gold
   const [botDiscards, setBotDiscards] = useState([null, null, null]); // last tile each opponent tossed
   const [botHands, setBotHands] = useState([[], [], []]); // the three opponents' concealed hands (face down to her)
   const [callable, setCallable] = useState(null);
@@ -225,6 +229,8 @@ export default function MahjongCoach() {
   );
 
   const allTiles = useMemo(() => [...hand, ...exposed.flat()], [hand, exposed]);
+  // When she wins, work out ONE clear way the 14 tiles make 4 sets + a pair.
+  const winBreakdown = useMemo(() => (phase === "won" ? decomposeWin(allTiles) : null), [phase, allTiles]);
   // Live read of how close she is to the goal — drives the panel + coaching.
   const progress = useMemo(() => analyzeHand(hand, exposed.length), [hand, exposed]);
   // Which three currently-selected concealed tiles (if any) form a valid set.
@@ -295,7 +301,7 @@ export default function MahjongCoach() {
     // Deal each of the three opponents a concealed 13-tile hand from the wall.
     const bots = [sortHand(w.splice(0, 13)), sortHand(w.splice(0, 13)), sortHand(w.splice(0, 13))];
     setWall(w); setHand(h); setBotHands(bots); setExposed([]); setSelected([]); setCallable(null);
-    setDiscards([]);
+    setDiscards([]); setHighlightIds([]);
     setBotDiscards([null, null, null]);
     setScreen("game");
     if (mode === "learn" && withCharleston) {
@@ -331,7 +337,7 @@ export default function MahjongCoach() {
     clearBotTimers();
     try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
     setHand([]); setWall([]); setExposed([]); setDiscards([]); setBotHands([[], [], []]);
-    setBotDiscards([null, null, null]); setCallable(null); setSelected([]);
+    setBotDiscards([null, null, null]); setCallable(null); setSelected([]); setHighlightIds([]);
     setPhase("draw"); setCoach(""); setTarget(""); setMode("learn");
     setScreen("menu");
   }, [stop, cancelListening]);
@@ -351,6 +357,7 @@ export default function MahjongCoach() {
 
   const runCoach = useCallback(async (question) => {
     setThinking(true);
+    setHighlightIds([]); // clear any old highlight while she waits
     const sys = buildSystemPrompt(mode, target);
     const f = coachFacts(hand);
     const tilesStr = sortHand(hand).map((t) => t.label).join(", ");
@@ -368,11 +375,16 @@ export default function MahjongCoach() {
       ? `${facts}\n\n${rules}\n\nShe asked out loud: "${question}"\n\nAnswer her kindly and simply, suggesting only things she can do right now.`
       : `${facts}\n\n${rules}\n\nGive her ONE gentle suggestion for her next move.`;
     const reply = await callCoach(sys, userText);
-    say(reply || localHint(allTiles));
+    const finalText = reply || localHint(allTiles);
+    say(finalText);
+    // Light up any of her tiles the coach named (deterministic label match).
+    const low = finalText.toLowerCase();
+    setHighlightIds(hand.filter((t) => low.includes(t.label.toLowerCase())).map((t) => t.id));
     setThinking(false);
   }, [allTiles, hand, exposed, mode, target, progress, actionsForPhase, say]);
 
   const toggleSelect = (tile) => {
+    setHighlightIds([]); // she's choosing now — let her own selection lead
     setSelected((s) => s.includes(tile.id) ? s.filter((x) => x !== tile.id) : s.length < 3 ? [...s, tile.id] : s);
   };
 
@@ -723,6 +735,47 @@ export default function MahjongCoach() {
     );
   }
 
+  if (phase === "won") {
+    return (
+      <Shell voiceOn={voiceOn} setVoiceOn={toggleVoice} onReset={startOver} resetLabel="Start over">
+        <div className="w-full max-w-6xl mx-auto rounded-3xl bg-stone-50 text-emerald-950 p-5 sm:p-6 shadow-2xl mb-4 flex items-start gap-4" aria-live="polite">
+          <div className="shrink-0 h-14 w-14 rounded-full bg-emerald-700 text-amber-200 flex items-center justify-center text-2xl font-black" aria-hidden="true">♪</div>
+          <p className="text-xl sm:text-2xl font-semibold leading-snug self-center">{coach}</p>
+        </div>
+
+        <div className="w-full max-w-6xl mx-auto text-center text-amber-200 text-2xl sm:text-3xl font-black mb-2">🎉 Here's how your hand won 🎉</div>
+        <p className="w-full max-w-6xl mx-auto text-center text-emerald-200 text-base mb-5">Four sets of three, and a pair.</p>
+
+        {winBreakdown ? (
+          <div className="w-full max-w-6xl mx-auto flex flex-wrap gap-3 justify-center mb-6">
+            {winBreakdown.sets.map((set, i) => (
+              <div key={i} className="rounded-2xl bg-emerald-800/60 p-3 flex flex-col items-center gap-2">
+                <div className="text-xs uppercase tracking-widest text-emerald-300 font-bold">Set {i + 1}</div>
+                <div className="flex gap-1.5">{set.map((t) => <Tile key={t.id} tile={t} small />)}</div>
+              </div>
+            ))}
+            <div className="rounded-2xl bg-amber-500/20 border-2 border-amber-400 p-3 flex flex-col items-center gap-2">
+              <div className="text-xs uppercase tracking-widest text-amber-300 font-bold">The pair</div>
+              <div className="flex gap-1.5">{winBreakdown.pair.map((t) => <Tile key={t.id} tile={t} small />)}</div>
+            </div>
+          </div>
+        ) : (
+          // Fallback (shouldn't happen for a real win): show all her tiles.
+          <div className="w-full max-w-6xl mx-auto flex flex-wrap gap-1.5 justify-center mb-6">
+            {allTiles.map((t) => <Tile key={t.id} tile={t} small />)}
+          </div>
+        )}
+
+        <div className="w-full max-w-6xl mx-auto">
+          <button onClick={() => startGame(mode === "learn")}
+            className="w-full rounded-2xl bg-amber-500 hover:bg-amber-400 text-emerald-950 text-2xl font-black py-5 focus:outline-none focus:ring-4 focus:ring-amber-300">
+            Play again 🎉
+          </button>
+        </div>
+      </Shell>
+    );
+  }
+
   return (
     <Shell voiceOn={voiceOn} setVoiceOn={toggleVoice} onReset={startOver} resetLabel="Start over">
       <div className="w-full max-w-6xl mx-auto rounded-3xl bg-stone-50 text-emerald-950 p-5 sm:p-6 shadow-2xl mb-4 flex items-start gap-4" aria-live="polite">
@@ -810,6 +863,7 @@ export default function MahjongCoach() {
           <div ref={rackRef} className="flex flex-nowrap gap-1.5 w-full justify-center">
             {hand.map((t) => (
               <Tile key={t.id} tile={t} selected={selected.includes(t.id)} fill
+                highlight={highlightIds.includes(t.id)}
                 draggable={canArrange}
                 dragging={dragId === t.id}
                 onPointerDown={canArrange ? (e) => onTilePointerDown(e, t) : undefined}
