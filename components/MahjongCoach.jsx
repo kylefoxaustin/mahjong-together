@@ -87,34 +87,35 @@ function useSpeech(enabled) {
 }
 
 function Tile({ tile, onClick, selected, dim, small }) {
-  // Glyph is ~2x larger now; the tile grows with it (and clips, below) so the
-  // image never escapes the rounded boundary while number/suit stay readable.
-  const w = small ? 108 : 160, h = small ? 132 : 208;
-  // For low vision the WORDS are the reliable signal, not the tiny pips inside
-  // the Unicode glyph — so suited tiles show a big number + suit, and the glyph
-  // is kept as a smaller accent above. Honors/Jokers show their full name big.
+  // Rack-friendly tile sized for a tablet. Glyph and number/suit live in their
+  // OWN fixed regions (top vs. bottom) so they can never overlap, and the glyph
+  // region clips so the image can't spill. The number is the reliable read for
+  // low vision; the glyph is the picture above it.
+  const w = small ? 50 : 66, h = small ? 70 : 94;
+  const glyphBox = small ? 38 : 50;
+  const glyphSize = tile.isJoker ? (small ? 22 : 30) : (small ? 28 : 38);
   const suited = /^(\d) (Crak|Bam|Dot)$/.exec(tile.label);
   return (
     <button
       onClick={onClick}
       disabled={!onClick}
       aria-label={tile.label}
-      className={`relative flex flex-col items-center justify-center overflow-hidden rounded-2xl border-4 transition motion-reduce:transition-none
+      className={`relative flex shrink-0 flex-col items-center justify-between overflow-hidden rounded-lg border-2 bg-white shadow-md transition motion-reduce:transition-none
         ${onClick
-          ? "cursor-pointer hover:-translate-y-2 focus:-translate-y-2 motion-reduce:hover:translate-y-0 motion-reduce:focus:translate-y-0 focus:outline-none focus:ring-4 focus:ring-red-400"
+          ? "cursor-pointer hover:-translate-y-1 focus:-translate-y-1 motion-reduce:hover:translate-y-0 motion-reduce:focus:translate-y-0 focus:outline-none focus:ring-4 focus:ring-red-400"
           : "cursor-default"}
-        ${selected ? "border-red-600 ring-4 ring-red-300 -translate-y-2 motion-reduce:translate-y-0" : "border-stone-400"}
-        ${dim ? "opacity-70" : ""} bg-white shadow-lg`}
+        ${selected ? "border-red-600 ring-4 ring-red-300 -translate-y-1 motion-reduce:translate-y-0" : "border-stone-400"}
+        ${dim ? "opacity-70" : ""}`}
       style={{ width: w, height: h }}
     >
-      <span aria-hidden="true" className="text-stone-700" style={{ fontSize: tile.isJoker ? (small ? 60 : 92) : (small ? 84 : 132), lineHeight: 1 }}>{tile.glyph}</span>
+      <span aria-hidden="true" className="flex w-full items-center justify-center overflow-hidden text-stone-700" style={{ height: glyphBox, fontSize: glyphSize, lineHeight: 1 }}>{tile.glyph}</span>
       {suited ? (
-        <span className="flex flex-col items-center leading-none">
-          <span className="font-black text-stone-900" style={{ fontSize: small ? 26 : 40 }}>{suited[1]}</span>
-          <span className="font-black text-stone-700 uppercase tracking-wide" style={{ fontSize: small ? 11 : 16 }}>{suited[2]}</span>
+        <span className="flex flex-col items-center leading-none pb-1">
+          <span className="font-black text-stone-900" style={{ fontSize: small ? 16 : 22 }}>{suited[1]}</span>
+          <span className="font-bold text-stone-600 uppercase tracking-wide" style={{ fontSize: small ? 8 : 10 }}>{suited[2]}</span>
         </span>
       ) : (
-        <span className="font-black text-stone-900 text-center leading-tight px-1" style={{ fontSize: small ? 12 : 18 }}>{tile.label}</span>
+        <span className="font-black text-stone-900 text-center leading-tight px-0.5 pb-1" style={{ fontSize: small ? 9 : 11 }}>{tile.label}</span>
       )}
     </button>
   );
@@ -452,7 +453,7 @@ export default function MahjongCoach() {
                   <div className="text-xs font-semibold text-emerald-200">let this go</div>
                 </div>
               ) : (
-                <div className="text-sm font-semibold text-emerald-400/70 flex items-center" style={{ height: 132 }}>waiting…</div>
+                <div className="text-sm font-semibold text-emerald-400/70 flex items-center" style={{ height: 70 }}>waiting…</div>
               )}
             </div>
           );
@@ -476,8 +477,14 @@ export default function MahjongCoach() {
             : phase === "draw" ? " — take a tile, or tap 3 matching to make a set"
             : ""}
         </div>
-        <div className="flex flex-wrap gap-3 justify-center">
-          {hand.map((t) => <Tile key={t.id} tile={t} selected={selected.includes(t.id)} onClick={tileClick(t)} />)}
+        {/* Single-row rack lined up in front of the player (traditional layout).
+            Tiles are sorted by suit/number. The inner w-max + mx-auto centers
+            the rack when it fits and stays fully scrollable (left edge always
+            reachable) on a narrow tablet. */}
+        <div className="overflow-x-auto px-1 py-1">
+          <div className="flex flex-nowrap gap-1.5 w-max mx-auto">
+            {hand.map((t) => <Tile key={t.id} tile={t} selected={selected.includes(t.id)} onClick={tileClick(t)} />)}
+          </div>
         </div>
       </div>
 
