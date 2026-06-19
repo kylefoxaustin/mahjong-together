@@ -201,6 +201,7 @@ export default function MahjongCoach() {
   const [wall, setWall] = useState([]);
   const [hand, setHand] = useState([]);
   const [exposed, setExposed] = useState([]);
+  const [lockedPair, setLockedPair] = useState(null); // the two tiles she's committed as her pair
   const [selected, setSelected] = useState([]);
   const [highlightIds, setHighlightIds] = useState([]); // tiles the coach just mentioned — lit up in gold
   const [botDiscards, setBotDiscards] = useState([null, null, null]); // last tile each opponent tossed
@@ -238,7 +239,7 @@ export default function MahjongCoach() {
     () => false, // server snapshot
   );
 
-  const allTiles = useMemo(() => [...hand, ...exposed.flat()], [hand, exposed]);
+  const allTiles = useMemo(() => [...hand, ...exposed.flat(), ...(lockedPair || [])], [hand, exposed, lockedPair]);
   // When she wins, work out ONE clear way the 14 tiles make 4 sets + a pair.
   const winBreakdown = useMemo(() => (phase === "won" ? decomposeWin(allTiles) : null), [phase, allTiles]);
   // The actual tiles she's holding toward the goal — drives the panel slots and
@@ -253,8 +254,9 @@ export default function MahjongCoach() {
       else if (i < locked + groups.sets.length + groups.building.length) slots.push("building");
       else slots.push("empty");
     }
-    return { setSlots: slots, pairState: groups.pair ? "held" : "empty" };
-  }, [exposed, groups]);
+    const pairState = lockedPair ? "locked" : groups.pair ? "held" : "empty";
+    return { setSlots: slots, pairState };
+  }, [exposed, groups, lockedPair]);
   // Tiles the panel is pointing at (her pair + the sets she's holding).
   const hintIds = useMemo(
     () => new Set([...(groups.pair || []), ...groups.sets.flat()].map((t) => t.id)),
@@ -263,6 +265,10 @@ export default function MahjongCoach() {
   // Which three currently-selected concealed tiles (if any) form a valid set.
   const selectedTiles = useMemo(() => hand.filter((t) => selected.includes(t.id)), [hand, selected]);
   const canMakeSet = selected.length === 3 && isValidSet(selectedTiles);
+  // Two matching REAL tiles she can commit as her pair (jokers never in the pair).
+  const canMakePair = selected.length === 2 && !lockedPair &&
+    selectedTiles.length === 2 && !selectedTiles[0].isJoker && !selectedTiles[1].isJoker &&
+    selectedTiles[0].key === selectedTiles[1].key;
   // She can declare a win only when she actually holds one (her 14 tiles), and
   // it's her turn — she decides WHEN, the game never finishes it for her.
   const canDeclareWin = mode === "learn" && phase === "discard" && isWinningHand(allTiles);
@@ -305,6 +311,7 @@ export default function MahjongCoach() {
         setWall(s.wall || []);
         setHand(s.hand || []);
         setExposed(s.exposed || []);
+        setLockedPair(s.lockedPair || null);
         setDiscards(s.discards || []);
         setBotDiscards(s.botDiscards || [null, null, null]);
         setBotHands(s.botHands || [[], [], []]);
@@ -327,13 +334,13 @@ export default function MahjongCoach() {
     try {
       if (screen === "game") {
         localStorage.setItem(SAVE_KEY, JSON.stringify({
-          screen, mode, difficulty, target, wall, hand, exposed, discards, botDiscards, botHands, callable, phase, coach, voiceOn,
+          screen, mode, difficulty, target, wall, hand, exposed, lockedPair, discards, botDiscards, botHands, callable, phase, coach, voiceOn,
         }));
       } else {
         localStorage.removeItem(SAVE_KEY); // back at the menu — nothing to resume
       }
     } catch { /* storage full or unavailable — ignore, game still works */ }
-  }, [screen, mode, difficulty, target, wall, hand, exposed, discards, botDiscards, botHands, callable, phase, coach, voiceOn]);
+  }, [screen, mode, difficulty, target, wall, hand, exposed, lockedPair, discards, botDiscards, botHands, callable, phase, coach, voiceOn]);
 
   const startGame = useCallback((withCharleston) => {
     stop();
@@ -342,7 +349,7 @@ export default function MahjongCoach() {
     const h = sortHand(w.splice(0, 13));
     // Deal each of the three opponents a concealed 13-tile hand from the wall.
     const bots = [sortHand(w.splice(0, 13)), sortHand(w.splice(0, 13)), sortHand(w.splice(0, 13))];
-    setWall(w); setHand(h); setBotHands(bots); setExposed([]); setSelected([]); setCallable(null);
+    setWall(w); setHand(h); setBotHands(bots); setExposed([]); setLockedPair(null); setSelected([]); setCallable(null);
     setDiscards([]); setHighlightIds([]);
     setBotDiscards([null, null, null]);
     setScreen("game");
@@ -378,7 +385,7 @@ export default function MahjongCoach() {
     cancelListening();
     clearBotTimers();
     try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
-    setHand([]); setWall([]); setExposed([]); setDiscards([]); setBotHands([[], [], []]);
+    setHand([]); setWall([]); setExposed([]); setLockedPair(null); setDiscards([]); setBotHands([[], [], []]);
     setBotDiscards([null, null, null]); setCallable(null); setSelected([]); setHighlightIds([]);
     setPhase("draw"); setCoach(""); setTarget(""); setMode("learn");
     setScreen("menu");
@@ -624,6 +631,24 @@ export default function MahjongCoach() {
       say("Lovely — that set is locked in, and I think you have a winning hand now! Press “I think I won!” when you're ready.");
     } else {
       say(phase === "discard" ? "Lovely — that set is locked in and safe. Now let one tile go." : "Lovely — that set is locked in and safe. Take a tile when you're ready.");
+    }
+  };
+
+  // "Make this my pair" — commit two matching tiles as her pair (the win needs
+  // exactly one). Like locking a set, it just sets them aside, safe.
+  const makePair = () => {
+    if (!canMakePair) return;
+    const pairTiles = hand.filter((t) => selected.includes(t.id));
+    const keep = hand.filter((t) => !selected.includes(t.id));
+    setLockedPair(pairTiles);
+    setHand(keep);
+    setSelected([]);
+    setHighlightIds([]);
+    const full = [...keep, ...exposed.flat(), ...pairTiles];
+    if (mode === "learn" && phase === "discard" && isWinningHand(full)) {
+      say("Your pair is set, and I think you have a winning hand now! Press “I think I won!” when you're ready.");
+    } else {
+      say(phase === "discard" ? "Your pair is set aside and safe. Now let one tile go." : "Your pair is set aside and safe. Take a tile when you're ready.");
     }
   };
 
@@ -885,7 +910,7 @@ export default function MahjongCoach() {
             <Slot state={goalSlots.pairState} label="The pair" pair />
           </div>
           <p className="text-center text-emerald-300 text-xs sm:text-sm mt-3">
-            Solid gold ✓ = locked in &amp; safe. A gold <span className="text-amber-300 font-bold">outline ○</span> means you're holding those tiles{hintsOn ? " (lit up below)" : ""} but haven't locked them — tap three matching tiles, then “Make this set,” to lock them in.
+            Solid gold ✓ = locked in &amp; safe. A gold <span className="text-amber-300 font-bold">outline ○</span> means you're holding those tiles{hintsOn ? " (lit up below)" : ""} but haven't locked them. Tap three matching tiles to “Make this set,” or two matching tiles to “Make this my pair.”
           </p>
         </div>
       )}
@@ -910,11 +935,21 @@ export default function MahjongCoach() {
         })}
       </div>
 
-      {exposed.length > 0 && (
+      {(exposed.length > 0 || lockedPair) && (
         <div className="w-full max-w-6xl mx-auto mb-3">
-          <div className="text-xs uppercase tracking-widest text-emerald-300 mb-2 font-bold">Sets you've made — locked in &amp; safe</div>
-          <div className="flex flex-wrap gap-2">
-            {exposed.map((m, i) => m.map((t) => <Tile key={t.id + i} tile={t} small dim />))}
+          <div className="text-xs uppercase tracking-widest text-emerald-300 mb-2 font-bold">Locked in &amp; safe</div>
+          <div className="flex flex-wrap gap-3 items-end">
+            {exposed.map((m, i) => (
+              <div key={`set${i}`} className="flex gap-1.5">
+                {m.map((t) => <Tile key={t.id} tile={t} small dim />)}
+              </div>
+            ))}
+            {lockedPair && (
+              <div className="flex flex-col items-center gap-1">
+                <div className="flex gap-1.5">{lockedPair.map((t) => <Tile key={t.id} tile={t} small dim />)}</div>
+                <div className="text-[10px] uppercase tracking-widest text-amber-300 font-bold">Your pair</div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -924,8 +959,8 @@ export default function MahjongCoach() {
           <div className="text-sm uppercase tracking-widest text-emerald-300 font-bold">
             Your tiles
             {inCharleston ? ` — tap 3 to pass (${selected.length}/3)`
-              : phase === "discard" ? " — tap to let go, drag to rearrange"
-              : phase === "draw" ? " — drag to rearrange, or tap 3 to make a set"
+              : phase === "discard" ? " — tap to let go · tap 3 = set, 2 = pair · drag to rearrange"
+              : phase === "draw" ? " — drag to rearrange · tap 3 = set, 2 = pair"
               : ""}
           </div>
           {canArrange && hand.length > 0 && (
@@ -966,6 +1001,14 @@ export default function MahjongCoach() {
               className="flex-1 min-w-[12rem] rounded-2xl bg-amber-500 text-emerald-950 text-xl font-black py-4 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
               {canMakeSet ? "Make this set ✓" : "Those three don't match — try again"}
             </button>
+          ) : canMakePair ? (
+            <>
+              <button onClick={makePair}
+                className="flex-1 min-w-[12rem] rounded-2xl bg-amber-500 text-emerald-950 text-xl font-black py-4 focus:outline-none focus:ring-4 focus:ring-amber-300">
+                Make this my pair ✓
+              </button>
+              <span className="text-emerald-200 text-sm font-semibold self-center">…or tap one more matching tile for a set of three.</span>
+            </>
           ) : phase === "discard" && selected.length === 1 ? (
             <button onClick={letItGo}
               className="flex-1 min-w-[12rem] rounded-2xl bg-emerald-700 hover:bg-emerald-600 text-white text-xl font-bold py-4 focus:outline-none focus:ring-4 focus:ring-amber-300">
@@ -973,9 +1016,11 @@ export default function MahjongCoach() {
             </button>
           ) : (
             <p className="flex-1 min-w-[12rem] text-emerald-100 text-lg font-semibold self-center">
-              {selected.length === 2
-                ? "That's a pair! Tap one more matching tile to make a set of three — or press “Take a tile”."
-                : "Tap two more matching tiles to make a set of three — or press “Take a tile”."}
+              {selected.length === 2 && lockedPair
+                ? "You already have your pair. Tap one more matching tile to make a set of three."
+                : selected.length === 2
+                  ? "Those two don't match. Pick two of the same tile for a pair (no Joker), or tap one more for a set."
+                  : "Tap matching tiles to make a set or a pair — or press “Take a tile”."}
             </p>
           )}
           <button onClick={() => setSelected([])}
