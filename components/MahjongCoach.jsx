@@ -93,14 +93,15 @@ function useSpeech(enabled) {
   return { speak, stop };
 }
 
-function Tile({ tile, onClick, selected, dim, small, draggable, dragging, onPointerDown, onPointerMove, onPointerUp }) {
-  // Rack-friendly tile sized for a tablet. Glyph and number/suit live in their
-  // OWN fixed regions (top vs. bottom) so they can never overlap, and the glyph
-  // region clips so the image can't spill. The number is the reliable read for
-  // low vision; the glyph is the picture above it.
-  const w = small ? 58 : 84, h = small ? 82 : 118;
-  const glyphBox = small ? 44 : 64;
-  const glyphSize = tile.isJoker ? (small ? 24 : 36) : (small ? 30 : 48);
+function Tile({ tile, onClick, selected, dim, small, draggable, dragging, fill, onPointerDown, onPointerMove, onPointerUp }) {
+  // Rack-friendly tile. Glyph and number/suit live in their OWN fixed regions
+  // (top vs. bottom) so they can never overlap, and the glyph region clips so
+  // the image can't spill. The number is the reliable read for low vision.
+  // `fill` lets a hand tile flex to share the rack width (so the whole row is
+  // visible and as large as the screen allows); otherwise it's a fixed size.
+  const w = small ? 60 : 84, h = small ? 92 : 132;
+  const glyphBox = small ? 50 : 74;
+  const glyphSize = tile.isJoker ? (small ? 26 : 40) : (small ? 34 : 54);
   const suited = /^(\d) (Crak|Bam|Dot)$/.exec(tile.label);
   return (
     <button
@@ -111,7 +112,7 @@ function Tile({ tile, onClick, selected, dim, small, draggable, dragging, onPoin
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      className={`relative flex shrink-0 flex-col items-center justify-between overflow-hidden rounded-lg border-2 bg-white shadow-md transition motion-reduce:transition-none
+      className={`relative flex ${fill ? "" : "shrink-0"} flex-col items-center justify-between overflow-hidden rounded-lg border-2 bg-white shadow-md transition motion-reduce:transition-none
         ${onClick
           ? "cursor-pointer hover:-translate-y-1 focus:-translate-y-1 motion-reduce:hover:translate-y-0 motion-reduce:focus:translate-y-0 focus:outline-none focus:ring-4 focus:ring-red-400"
           : "cursor-default"}
@@ -119,16 +120,16 @@ function Tile({ tile, onClick, selected, dim, small, draggable, dragging, onPoin
         ${dragging ? "opacity-80 ring-4 ring-amber-400 scale-105 shadow-xl z-10" : ""}
         ${selected ? "border-red-600 ring-4 ring-red-300 -translate-y-1 motion-reduce:translate-y-0" : "border-stone-400"}
         ${dim ? "opacity-70" : ""}`}
-      style={{ width: w, height: h }}
+      style={fill ? { flex: "1 1 0", minWidth: 62, maxWidth: 104, height: h } : { width: w, height: h }}
     >
       <span aria-hidden="true" className="flex w-full items-center justify-center overflow-hidden text-stone-700" style={{ height: glyphBox, fontSize: glyphSize, lineHeight: 1 }}>{tile.glyph}</span>
       {suited ? (
         <span className="flex flex-col items-center leading-none pb-1">
-          <span className="font-black text-stone-900" style={{ fontSize: small ? 18 : 30 }}>{suited[1]}</span>
-          <span className="font-bold text-stone-600 uppercase tracking-wide" style={{ fontSize: small ? 8 : 13 }}>{suited[2]}</span>
+          <span className="font-black text-stone-900" style={{ fontSize: small ? 20 : 34 }}>{suited[1]}</span>
+          <span className="font-bold text-stone-600 uppercase tracking-wide" style={{ fontSize: small ? 9 : 14 }}>{suited[2]}</span>
         </span>
       ) : (
-        <span className="font-black text-stone-900 text-center leading-tight px-0.5 pb-1" style={{ fontSize: small ? 9 : 13 }}>{tile.label}</span>
+        <span className="font-black text-stone-900 text-center leading-tight px-0.5 pb-1" style={{ fontSize: small ? 10 : 14 }}>{tile.label}</span>
       )}
     </button>
   );
@@ -585,19 +586,19 @@ export default function MahjongCoach() {
 
   return (
     <Shell voiceOn={voiceOn} setVoiceOn={() => { stop(); setVoiceOn((v) => !v); }} onReset={startOver} resetLabel="Start over">
-      <div className="w-full max-w-5xl mx-auto rounded-3xl bg-stone-50 text-emerald-950 p-5 sm:p-6 shadow-2xl mb-4 flex items-start gap-4" aria-live="polite">
+      <div className="w-full max-w-6xl mx-auto rounded-3xl bg-stone-50 text-emerald-950 p-5 sm:p-6 shadow-2xl mb-4 flex items-start gap-4" aria-live="polite">
         <div className="shrink-0 h-14 w-14 rounded-full bg-emerald-700 text-amber-200 flex items-center justify-center text-2xl font-black" aria-hidden="true">♪</div>
         <p className="text-xl sm:text-2xl font-semibold leading-snug self-center">{thinking ? "Let me look at your tiles…" : coach}</p>
       </div>
 
       {mode === "card" && (
-        <div className="w-full max-w-5xl mx-auto mb-3 text-center text-amber-200 text-base font-semibold">
+        <div className="w-full max-w-6xl mx-auto mb-3 text-center text-amber-200 text-base font-semibold">
           Going for: <span className="italic">{target}</span>
         </div>
       )}
 
       {mode === "learn" && phase !== "won" && phase !== "botwon" && (
-        <div className="w-full max-w-5xl mx-auto mb-4 rounded-3xl bg-emerald-800/40 p-4">
+        <div className="w-full max-w-6xl mx-auto mb-4 rounded-3xl bg-emerald-800/40 p-4">
           <div className="text-sm uppercase tracking-widest text-emerald-300 mb-3 font-bold text-center">Your goal — four sets and a pair</div>
           <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
             {progress.setSlots.map((s, i) => <Slot key={i} state={s} label={`Set ${i + 1}`} />)}
@@ -607,7 +608,7 @@ export default function MahjongCoach() {
         </div>
       )}
 
-      <div className="w-full max-w-5xl mx-auto grid grid-cols-3 gap-3 mb-4">
+      <div className="w-full max-w-6xl mx-auto grid grid-cols-3 gap-3 mb-4">
         {SEAT_NAMES.map((name, i) => {
           const t = botDiscards[i];
           return (
@@ -620,7 +621,7 @@ export default function MahjongCoach() {
                   <div className="text-xs font-semibold text-emerald-200">let this go</div>
                 </div>
               ) : (
-                <div className="text-sm font-semibold text-emerald-400/70 flex items-center" style={{ height: 82 }}>waiting…</div>
+                <div className="text-sm font-semibold text-emerald-400/70 flex items-center" style={{ height: 92 }}>waiting…</div>
               )}
             </div>
           );
@@ -628,7 +629,7 @@ export default function MahjongCoach() {
       </div>
 
       {exposed.length > 0 && (
-        <div className="w-full max-w-5xl mx-auto mb-3">
+        <div className="w-full max-w-6xl mx-auto mb-3">
           <div className="text-xs uppercase tracking-widest text-emerald-300 mb-2 font-bold">Sets you've made — locked in &amp; safe</div>
           <div className="flex flex-wrap gap-2">
             {exposed.map((m, i) => m.map((t) => <Tile key={t.id + i} tile={t} small dim />))}
@@ -636,7 +637,7 @@ export default function MahjongCoach() {
         </div>
       )}
 
-      <div className="w-full max-w-5xl mx-auto rounded-3xl bg-emerald-800/60 p-4 sm:p-5 mb-4">
+      <div className="w-full max-w-6xl mx-auto rounded-3xl bg-emerald-800/60 p-4 sm:p-5 mb-4">
         <div className="flex items-center justify-between gap-3 mb-3">
           <div className="text-sm uppercase tracking-widest text-emerald-300 font-bold">
             Your tiles
@@ -653,14 +654,13 @@ export default function MahjongCoach() {
           )}
         </div>
         {/* Single-row rack lined up in front of the player (traditional layout).
-            She can drag tiles to arrange them herself; new draws append to the
-            end and "Tidy up" re-sorts on demand. The inner w-max + mx-auto
-            centers the rack when it fits and stays fully scrollable on a narrow
-            tablet. */}
+            Tiles flex to share the full width, so the whole row is visible and
+            as large as the iPad allows. She can drag to rearrange; new draws
+            append to the end and "Tidy up" re-sorts on demand. */}
         <div className="overflow-x-auto px-1 py-1">
-          <div ref={rackRef} className="flex flex-nowrap gap-1.5 w-max mx-auto">
+          <div ref={rackRef} className="flex flex-nowrap gap-1.5 w-full justify-center">
             {hand.map((t) => (
-              <Tile key={t.id} tile={t} selected={selected.includes(t.id)}
+              <Tile key={t.id} tile={t} selected={selected.includes(t.id)} fill
                 draggable={canArrange}
                 dragging={dragId === t.id}
                 onPointerDown={canArrange ? (e) => onTilePointerDown(e, t) : undefined}
@@ -677,7 +677,7 @@ export default function MahjongCoach() {
       </div>
 
       {(phase === "draw" || phase === "discard") && selected.length > 0 && (
-        <div className="w-full max-w-5xl mx-auto flex flex-wrap items-center gap-3 mb-3">
+        <div className="w-full max-w-6xl mx-auto flex flex-wrap items-center gap-3 mb-3">
           {selected.length === 3 ? (
             <button onClick={makeSet} disabled={!canMakeSet}
               className="flex-1 min-w-[12rem] rounded-2xl bg-amber-500 text-emerald-950 text-xl font-black py-4 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
@@ -703,7 +703,7 @@ export default function MahjongCoach() {
       )}
 
       {inCharleston ? (
-        <div className="w-full max-w-5xl mx-auto flex gap-3 mb-4">
+        <div className="w-full max-w-6xl mx-auto flex gap-3 mb-4">
           <button onClick={passCharleston} disabled={selected.length !== 3}
             className="flex-1 rounded-2xl bg-amber-500 text-emerald-950 text-2xl font-black py-5 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
             {selected.length === 3 ? "Pass these 3 →" : `Pick 3 to pass (${selected.length}/3)`}</button>
@@ -711,12 +711,12 @@ export default function MahjongCoach() {
             className="rounded-2xl bg-emerald-700 text-white px-6 text-lg font-bold focus:outline-none focus:ring-4 focus:ring-amber-300">Skip</button>
         </div>
       ) : phase === "call" ? (
-        <div className="w-full max-w-5xl mx-auto flex gap-3 mb-4">
+        <div className="w-full max-w-6xl mx-auto flex gap-3 mb-4">
           <button onClick={takeCall} className="flex-1 rounded-2xl bg-amber-500 text-emerald-950 text-2xl font-black py-5 focus:outline-none focus:ring-4 focus:ring-amber-300">Take it ({callable?.label})</button>
           <button onClick={leaveCall} className="flex-1 rounded-2xl bg-emerald-700 text-white text-2xl font-bold py-5 focus:outline-none focus:ring-4 focus:ring-amber-300">Leave it</button>
         </div>
       ) : (
-        <div className="w-full max-w-5xl mx-auto flex flex-col sm:flex-row gap-3 mb-4">
+        <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row gap-3 mb-4">
           <button onClick={(phase === "won" || phase === "botwon") ? () => startGame(mode === "learn") : drawTile} disabled={phase !== "draw" && phase !== "won" && phase !== "botwon"}
             className="flex-1 rounded-2xl bg-amber-500 enabled:hover:bg-amber-400 text-emerald-950 text-2xl font-black py-5 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
             {phase === "won" ? "Play again 🎉" : phase === "botwon" ? "Play again" : phase === "bots" ? "Other players…" : "Take a tile"}
@@ -739,7 +739,7 @@ export default function MahjongCoach() {
         </div>
       )}
 
-      <div className="w-full max-w-5xl mx-auto flex gap-2">
+      <div className="w-full max-w-6xl mx-auto flex gap-2">
         <label htmlFor="coach-question" className="sr-only">Type a question for the coach</label>
         <input id="coach-question" value={typed} onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => e.key === "Enter" && askTyped()}
           placeholder="…or type a question for the coach"
@@ -754,7 +754,7 @@ export default function MahjongCoach() {
 function Shell({ children, voiceOn, setVoiceOn, onReset, resetLabel = "Deal new tiles", hideReset }) {
   return (
     <div className="min-h-screen w-full bg-emerald-900 text-stone-100 p-4 sm:p-6">
-      <div className="w-full max-w-5xl mx-auto flex items-center justify-end gap-2 mb-4">
+      <div className="w-full max-w-6xl mx-auto flex items-center justify-end gap-2 mb-4">
         <button onClick={setVoiceOn} aria-pressed={voiceOn} className="flex items-center gap-2 rounded-full bg-emerald-700 hover:bg-emerald-600 px-4 py-2 text-base font-bold focus:outline-none focus:ring-4 focus:ring-amber-300">
           {voiceOn ? <Volume2 size={22} /> : <VolumeX size={22} />}{voiceOn ? "Voice on" : "Voice off"}
         </button>
