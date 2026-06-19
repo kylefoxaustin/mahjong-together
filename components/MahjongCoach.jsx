@@ -868,7 +868,11 @@ export default function MahjongCoach() {
         <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row gap-3 mb-4">
           <button onClick={(phase === "won" || phase === "botwon") ? () => startGame(mode === "learn") : drawTile} disabled={phase !== "draw" && phase !== "won" && phase !== "botwon"}
             className="flex-1 rounded-2xl bg-amber-500 enabled:hover:bg-amber-400 text-emerald-950 text-2xl font-black py-5 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
-            {phase === "won" ? "Play again 🎉" : phase === "botwon" ? "Play again" : phase === "bots" ? "Other players…" : "Take a tile"}
+            {phase === "won" ? "Play again 🎉"
+              : phase === "botwon" ? "Play again"
+              : phase === "bots" ? "Other players…"
+              : phase === "discard" ? "Let a tile go first"
+              : "Take a tile"}
           </button>
           <button onClick={() => runCoach()} disabled={thinking || hand.length === 0}
             className="flex-1 rounded-2xl bg-emerald-600 enabled:hover:bg-emerald-500 text-white text-2xl font-bold py-5 flex items-center justify-center gap-3 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
