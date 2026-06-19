@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from "react";
 import { Volume2, VolumeX, Mic, HelpCircle, RotateCcw, ArrowRight, BadgeCheck } from "lucide-react";
-import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, pickAssistedDrawIndex, shuffle } from "@/lib/tiles";
+import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, pickAssistedDrawIndex, shuffle, coachFacts } from "@/lib/tiles";
 import { buildSystemPrompt, callCoach } from "@/lib/coach";
 
 /* ------------------------------------------------------------------ *
@@ -211,16 +211,22 @@ export default function MahjongCoach() {
 
   const runCoach = useCallback(async (question) => {
     setThinking(true);
-    const tilesStr = sortHand(hand).map((t) => t.label).join(", ");
     const sys = buildSystemPrompt(mode, target);
-    const exposedStr = exposed.length ? ` She has already locked in these sets: ${exposed.map((m) => m[0].label + " set").join("; ")}.` : "";
-    const progressStr = mode === "learn"
-      ? ` Toward the goal she has ${progress.sets} of 4 sets done and ${progress.hasPair ? "her pair" : "no pair yet"}.`
-      : "";
-    const ctx = `Her tiles in hand: ${tilesStr}.${exposedStr}${progressStr}\nWhat she can do right now: ${actionsForPhase()}`;
+    const f = coachFacts(hand);
+    const tilesStr = sortHand(hand).map((t) => t.label).join(", ");
+    // Exact facts from the engine. The coach phrases these; it must not recount.
+    const facts = [
+      `Sets already locked in and safe: ${exposed.length}.`,
+      `Tiles she ALREADY has three of (ready-made sets): ${f.readySets.length ? f.readySets.join(", ") : "none"}.`,
+      `Pairs in her hand (two matching — one tile away from a set): ${f.pairs.length ? f.pairs.join(", ") : "none"}.`,
+      `Jokers in her hand: ${f.jokers} (a Joker can be the third tile of any set).`,
+      mode === "learn" ? `Progress: ${progress.sets} of 4 sets, and ${progress.hasPair ? "her pair is set" : "no pair yet"}.` : "",
+      `Her full hand, for context only: ${tilesStr}.`,
+    ].filter(Boolean).join("\n");
+    const rules = `These facts are exact and come from the game. Do NOT count her tiles or invent any numbers — rely only on the facts above. If you suggest making a set, name exactly which tiles to tap using only the pairs and Jokers listed (for example, "your two West Winds and one Joker"). What she can do right now: ${actionsForPhase()}`;
     const userText = question
-      ? `${ctx}\n\nShe asked out loud: "${question}"\n\nAnswer her kindly and simply, and only suggest things she can actually do right now.`
-      : `${ctx}\n\nGive her ONE gentle suggestion for her next move, using only actions she can do right now.`;
+      ? `${facts}\n\n${rules}\n\nShe asked out loud: "${question}"\n\nAnswer her kindly and simply, suggesting only things she can do right now.`
+      : `${facts}\n\n${rules}\n\nGive her ONE gentle suggestion for her next move.`;
     const reply = await callCoach(sys, userText);
     say(reply || localHint(allTiles));
     setThinking(false);
