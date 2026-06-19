@@ -76,7 +76,7 @@ function selectBestVoice() {
   return pool.find((v) => v.lang === "en-US") || pool[0];
 }
 
-function useSpeech(enabled) {
+function useSpeech() {
   const voiceRef = useRef(null);
 
   // Warm up the voice list once on mount; re-resolve when it changes.
@@ -88,8 +88,11 @@ function useSpeech(enabled) {
     return () => window.speechSynthesis.removeEventListener?.("voiceschanged", resolve);
   }, []);
 
+  // Always speaks when called — callers decide whether voice is on. iOS needs
+  // the FIRST utterance to happen inside a user gesture, so the voice toggle
+  // calls this directly on tap, which both confirms it works and unlocks audio.
   const speak = useCallback((text) => {
-    if (!enabled || !text || typeof window === "undefined" || !window.speechSynthesis) return;
+    if (!text || typeof window === "undefined" || !window.speechSynthesis) return;
     try {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
@@ -103,7 +106,7 @@ function useSpeech(enabled) {
     } catch {
       // Some browsers throw if speech is interrupted mid-queue — ignore.
     }
-  }, [enabled]);
+  }, []);
 
   const stop = useCallback(() => {
     if (typeof window !== "undefined" && window.speechSynthesis) {
@@ -206,7 +209,7 @@ export default function MahjongCoach() {
   const botTimersRef = useRef([]); // pending setTimeout ids for the staged opponent turns
   const clearBotTimers = () => { botTimersRef.current.forEach(clearTimeout); botTimersRef.current = []; };
 
-  const { speak, stop } = useSpeech(voiceOn);
+  const { speak, stop } = useSpeech();
   // SpeechRecognition (STT) is Chrome/Android-only and absent on iOS Safari,
   // and doesn't exist during SSR. useSyncExternalStore reads it client-only:
   // the server snapshot is false, so there's no hydration mismatch, and the
@@ -223,7 +226,15 @@ export default function MahjongCoach() {
   // Which three currently-selected concealed tiles (if any) form a valid set.
   const selectedTiles = useMemo(() => hand.filter((t) => selected.includes(t.id)), [hand, selected]);
   const canMakeSet = selected.length === 3 && isValidSet(selectedTiles);
-  const say = useCallback((msg) => { setCoach(msg); speak(msg); }, [speak]);
+  const say = useCallback((msg) => { setCoach(msg); if (voiceOn) speak(msg); }, [voiceOn, speak]);
+
+  // Voice on/off. Turning it ON speaks the current coaching line immediately
+  // (inside the tap) so she hears that it works and gets caught up; iOS also
+  // needs that first utterance to be in a user gesture to unlock audio.
+  const toggleVoice = useCallback(() => {
+    if (voiceOn) { stop(); setVoiceOn(false); }
+    else { setVoiceOn(true); speak(coach || "Voice is on. I'll read everything to you."); }
+  }, [voiceOn, coach, speak, stop]);
 
   // Restore an auto-saved game on first load (client only, so no SSR mismatch).
   // We set the coach text without speaking, so reopening is silent. Hydrating
@@ -573,7 +584,7 @@ export default function MahjongCoach() {
 
   if (screen === "menu") {
     return (
-      <Shell voiceOn={voiceOn} setVoiceOn={() => { stop(); setVoiceOn((v) => !v); }} hideReset>
+      <Shell voiceOn={voiceOn} setVoiceOn={toggleVoice} hideReset>
         <div className="w-full max-w-3xl mx-auto text-center pt-6">
           <h1 className="text-3xl sm:text-4xl font-black text-amber-200 mb-2">Mahjong, together</h1>
           <p className="text-emerald-200 text-lg mb-6">Pick how you'd like to play today.</p>
@@ -618,7 +629,7 @@ export default function MahjongCoach() {
 
   if (screen === "cardsetup") {
     return (
-      <Shell voiceOn={voiceOn} setVoiceOn={() => { stop(); setVoiceOn((v) => !v); }} onReset={() => setScreen("menu")} resetLabel="Menu">
+      <Shell voiceOn={voiceOn} setVoiceOn={toggleVoice} onReset={() => setScreen("menu")} resetLabel="Menu">
         <div className="w-full max-w-2xl mx-auto pt-6">
           <h2 className="text-2xl sm:text-3xl font-black text-amber-200 mb-3">Which hand from your card?</h2>
           <p className="text-emerald-100 text-lg mb-4">
@@ -642,7 +653,7 @@ export default function MahjongCoach() {
   }
 
   return (
-    <Shell voiceOn={voiceOn} setVoiceOn={() => { stop(); setVoiceOn((v) => !v); }} onReset={startOver} resetLabel="Start over">
+    <Shell voiceOn={voiceOn} setVoiceOn={toggleVoice} onReset={startOver} resetLabel="Start over">
       <div className="w-full max-w-6xl mx-auto rounded-3xl bg-stone-50 text-emerald-950 p-5 sm:p-6 shadow-2xl mb-4 flex items-start gap-4" aria-live="polite">
         <div className="shrink-0 h-14 w-14 rounded-full bg-emerald-700 text-amber-200 flex items-center justify-center text-2xl font-black" aria-hidden="true">♪</div>
         <p className="text-xl sm:text-2xl font-semibold leading-snug self-center">{thinking ? "Let me look at your tiles…" : coach}</p>
