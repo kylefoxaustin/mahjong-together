@@ -24,3 +24,24 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* A gentle "tile tossed onto the table" entrance for opponent discards.
+   Keyed by tile id in the component so it replays each round. */
+@keyframes tossIn {
+  from {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.85) rotate(-4deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-toss {
+  animation: tossIn 380ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-toss {
+    animation: none;
+  }
+}
