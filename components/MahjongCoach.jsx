@@ -87,7 +87,9 @@ function useSpeech(enabled) {
 }
 
 function Tile({ tile, onClick, selected, dim, small }) {
-  const w = small ? 80 : 110, h = small ? 116 : 168;
+  // Glyph is ~2x larger now; the tile grows with it (and clips, below) so the
+  // image never escapes the rounded boundary while number/suit stay readable.
+  const w = small ? 108 : 160, h = small ? 132 : 208;
   // For low vision the WORDS are the reliable signal, not the tiny pips inside
   // the Unicode glyph — so suited tiles show a big number + suit, and the glyph
   // is kept as a smaller accent above. Honors/Jokers show their full name big.
@@ -97,7 +99,7 @@ function Tile({ tile, onClick, selected, dim, small }) {
       onClick={onClick}
       disabled={!onClick}
       aria-label={tile.label}
-      className={`relative flex flex-col items-center justify-center rounded-2xl border-4 transition motion-reduce:transition-none
+      className={`relative flex flex-col items-center justify-center overflow-hidden rounded-2xl border-4 transition motion-reduce:transition-none
         ${onClick
           ? "cursor-pointer hover:-translate-y-2 focus:-translate-y-2 motion-reduce:hover:translate-y-0 motion-reduce:focus:translate-y-0 focus:outline-none focus:ring-4 focus:ring-red-400"
           : "cursor-default"}
@@ -105,7 +107,7 @@ function Tile({ tile, onClick, selected, dim, small }) {
         ${dim ? "opacity-70" : ""} bg-white shadow-lg`}
       style={{ width: w, height: h }}
     >
-      <span aria-hidden="true" className="text-stone-700" style={{ fontSize: tile.isJoker ? (small ? 30 : 46) : (small ? 42 : 66), lineHeight: 1 }}>{tile.glyph}</span>
+      <span aria-hidden="true" className="text-stone-700" style={{ fontSize: tile.isJoker ? (small ? 60 : 92) : (small ? 84 : 132), lineHeight: 1 }}>{tile.glyph}</span>
       {suited ? (
         <span className="flex flex-col items-center leading-none">
           <span className="font-black text-stone-900" style={{ fontSize: small ? 26 : 40 }}>{suited[1]}</span>
