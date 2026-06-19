@@ -12,6 +12,19 @@ const SAVE_KEY = "mahjong-together:v1";
 // The three opponent seats, in turn order.
 const SEAT_NAMES = ["Left player", "Across", "Right player"];
 
+// Difficulty ladder. `herAssist` nudges helpful tiles to her on her draw (the
+// gentle "she can't lose" mode); `botAssist` is how often each opponent draws
+// toward completing its OWN hand (0 = blind/basic, 1 = master). Everyone draws
+// from the same shuffled wall — higher levels just make the opponents sharper.
+const DIFFICULTY = {
+  easy:     { label: "Easy",     blurb: "I help you a lot, and the others play simply.", herAssist: true,  botAssist: 0 },
+  normal:   { label: "Normal",   blurb: "Everyone draws their own tiles; the others play simply.", herAssist: false, botAssist: 0 },
+  hard:     { label: "Hard",     blurb: "The other players are sharper and play to win.", herAssist: false, botAssist: 0.6 },
+  advanced: { label: "Advanced", blurb: "The other players are masters — a real challenge!", herAssist: false, botAssist: 1 },
+};
+const DIFF_ORDER = ["easy", "normal", "hard", "advanced"];
+const DIFF_KEY = "mahjong-together:difficulty"; // remembers her last choice across visits
+
 /* ------------------------------------------------------------------ *
  *  Mahjong, Together — coach + game UI (ported from the v0.2 artifact)
  *
@@ -159,6 +172,7 @@ function Slot({ state, label, pair }) {
 export default function MahjongCoach() {
   const [screen, setScreen] = useState("menu");
   const [mode, setMode] = useState("learn");
+  const [difficulty, setDifficulty] = useState("easy");
   const [target, setTarget] = useState("");
 
   const [wall, setWall] = useState([]);
@@ -209,10 +223,13 @@ export default function MahjongCoach() {
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     try {
+      const pref = localStorage.getItem(DIFF_KEY);
+      if (pref && DIFFICULTY[pref]) setDifficulty(pref); // remembered menu choice
       const raw = localStorage.getItem(SAVE_KEY);
       const s = raw && JSON.parse(raw);
       if (s && s.screen === "game" && Array.isArray(s.hand)) {
         setMode(s.mode || "learn");
+        if (s.difficulty && DIFFICULTY[s.difficulty]) setDifficulty(s.difficulty);
         setTarget(s.target || "");
         setWall(s.wall || []);
         setHand(s.hand || []);
@@ -239,13 +256,13 @@ export default function MahjongCoach() {
     try {
       if (screen === "game") {
         localStorage.setItem(SAVE_KEY, JSON.stringify({
-          screen, mode, target, wall, hand, exposed, discards, botDiscards, botHands, callable, phase, coach, voiceOn,
+          screen, mode, difficulty, target, wall, hand, exposed, discards, botDiscards, botHands, callable, phase, coach, voiceOn,
         }));
       } else {
         localStorage.removeItem(SAVE_KEY); // back at the menu — nothing to resume
       }
     } catch { /* storage full or unavailable — ignore, game still works */ }
-  }, [screen, mode, target, wall, hand, exposed, discards, botDiscards, botHands, callable, phase, coach, voiceOn]);
+  }, [screen, mode, difficulty, target, wall, hand, exposed, discards, botDiscards, botHands, callable, phase, coach, voiceOn]);
 
   const startGame = useCallback((withCharleston) => {
     stop();
@@ -268,6 +285,12 @@ export default function MahjongCoach() {
         : "Here are your 13 tiles. Take a tile from the wall and we'll figure out the rest together.");
     }
   }, [mode, target, say, stop]);
+
+  // Pick (and remember) a difficulty from the menu.
+  const chooseDifficulty = useCallback((key) => {
+    setDifficulty(key);
+    try { localStorage.setItem(DIFF_KEY, key); } catch { /* ignore */ }
+  }, []);
 
   // "Start over" — wipe the saved game and return to a clean menu.
   const startOver = useCallback(() => {
@@ -348,20 +371,26 @@ export default function MahjongCoach() {
   // REVEAL each toss on a short timer so she can watch what they did.
   const playBotsRound = useCallback((herConcealed) => {
     clearBotTimers();
+    const botAssist = DIFFICULTY[difficulty].botAssist; // 0 = basic/blind, 1 = master
     let w = [...wall];
     let disc = [...discards];
-    const draw = () => {
+    // A bot draws blind by default; at higher difficulty it sometimes draws the
+    // most useful tile for its OWN hand, so it completes faster and wins more.
+    const drawFor = (botHand) => {
       if (w.length === 0) { if (!disc.length) return null; w = shuffle(disc); disc = []; }
-      return w.shift();
+      const idx = botAssist > 0 && Math.random() < botAssist ? pickAssistedDrawIndex(w, botHand) : 0;
+      return w.splice(idx, 1)[0];
     };
     const bots = botHands.map((h) => [...h]);
     const tosses = [null, null, null];
     let winner = -1;
     for (let i = 0; i < 3; i++) {
-      const drawn = draw();
+      const drawn = drawFor(bots[i]);
       if (!drawn) break;
       bots[i] = [...bots[i], drawn];
-      if (isWinningHand(bots[i])) { winner = i; break; }
+      // Bots only declare Mahjong in the practice game — in "Practice my card"
+      // they never end her round, so she can keep working toward her hand.
+      if (mode === "learn" && isWinningHand(bots[i])) { winner = i; break; }
       const d = chooseDiscard(bots[i]);
       bots[i] = bots[i].filter((t) => t.id !== d.id);
       tosses[i] = d;
@@ -398,14 +427,15 @@ export default function MahjongCoach() {
         say("Your turn again — take a tile when you're ready.");
       }
     }, STEP * (lastReveal + 2)));
-  }, [wall, discards, botHands, say]);
+  }, [wall, discards, botHands, difficulty, mode, say]);
 
   const drawTile = () => {
     if (phase !== "draw") return;
     const w = topUp(wall, 1);
     if (w.length === 0) { startGame(false); return; } // pile and wall both empty — fresh deal
-    // Guided win (learn mode): nudge a helpful tile her way; card mode draws straight.
-    const idx = mode === "learn" ? pickAssistedDrawIndex(w, hand) : 0;
+    // On Easy (learn mode) we nudge a helpful tile her way so she can't lose;
+    // at Normal and up she draws from the wall like everyone else.
+    const idx = mode === "learn" && DIFFICULTY[difficulty].herAssist ? pickAssistedDrawIndex(w, hand) : 0;
     const t = w[idx];
     const rest = [...w.slice(0, idx), ...w.slice(idx + 1)];
     // Append the new tile (don't re-sort) so her own arrangement is preserved;
@@ -538,12 +568,31 @@ export default function MahjongCoach() {
       <Shell voiceOn={voiceOn} setVoiceOn={() => { stop(); setVoiceOn((v) => !v); }} hideReset>
         <div className="w-full max-w-3xl mx-auto text-center pt-6">
           <h1 className="text-3xl sm:text-4xl font-black text-amber-200 mb-2">Mahjong, together</h1>
-          <p className="text-emerald-200 text-lg mb-8">Pick how you'd like to play today.</p>
+          <p className="text-emerald-200 text-lg mb-6">Pick how you'd like to play today.</p>
+
+          <div className="mb-8 text-left">
+            <div className="text-emerald-200 text-sm font-bold uppercase tracking-widest mb-2 text-center">How challenging?</div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {DIFF_ORDER.map((key) => {
+                const d = DIFFICULTY[key];
+                const on = difficulty === key;
+                return (
+                  <button key={key} onClick={() => chooseDifficulty(key)} aria-pressed={on}
+                    className={`rounded-2xl p-3 border-4 transition motion-reduce:transition-none focus:outline-none focus:ring-4 focus:ring-amber-300
+                      ${on ? "bg-amber-400 border-amber-300 text-emerald-950" : "bg-emerald-800/60 border-emerald-700 text-emerald-100 hover:bg-emerald-700/60"}`}>
+                    <div className="text-lg font-black">{d.label}</div>
+                    <div className={`text-xs font-semibold mt-1 ${on ? "text-emerald-900" : "text-emerald-300"}`}>{d.blurb}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="grid sm:grid-cols-2 gap-4">
             <button onClick={() => { setMode("learn"); startGame(true); }}
               className="rounded-3xl bg-stone-50 text-emerald-950 p-6 text-left shadow-2xl transition hover:-translate-y-1 motion-reduce:transition-none motion-reduce:hover:translate-y-0 focus:outline-none focus:ring-4 focus:ring-amber-400">
               <div className="text-2xl font-black mb-2">Just play &amp; learn</div>
-              <p className="text-base text-stone-600">A gentle full game — the Charleston, taking tiles off the table, and a simple hand to aim for. The coach walks you through every step. You can't lose.</p>
+              <p className="text-base text-stone-600">A gentle full game — the Charleston, taking tiles off the table, and a simple hand to aim for. The coach walks you through every step. On Easy, you can't lose.</p>
             </button>
             <button onClick={() => { setMode("card"); setScreen("cardsetup"); }}
               className="rounded-3xl bg-stone-50 text-emerald-950 p-6 text-left shadow-2xl transition hover:-translate-y-1 motion-reduce:transition-none motion-reduce:hover:translate-y-0 focus:outline-none focus:ring-4 focus:ring-amber-400">
@@ -589,6 +638,10 @@ export default function MahjongCoach() {
       <div className="w-full max-w-6xl mx-auto rounded-3xl bg-stone-50 text-emerald-950 p-5 sm:p-6 shadow-2xl mb-4 flex items-start gap-4" aria-live="polite">
         <div className="shrink-0 h-14 w-14 rounded-full bg-emerald-700 text-amber-200 flex items-center justify-center text-2xl font-black" aria-hidden="true">♪</div>
         <p className="text-xl sm:text-2xl font-semibold leading-snug self-center">{thinking ? "Let me look at your tiles…" : coach}</p>
+      </div>
+
+      <div className="w-full max-w-6xl mx-auto -mt-2 mb-3 text-center text-emerald-300 text-sm font-semibold">
+        Level: {DIFFICULTY[difficulty].label}
       </div>
 
       {mode === "card" && (
