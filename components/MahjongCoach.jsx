@@ -86,7 +86,7 @@ function useSpeech(enabled) {
   return { speak, stop };
 }
 
-function Tile({ tile, onClick, selected, dim, small }) {
+function Tile({ tile, onClick, selected, dim, small, draggable, dragging, onPointerDown, onPointerMove, onPointerUp }) {
   // Rack-friendly tile sized for a tablet. Glyph and number/suit live in their
   // OWN fixed regions (top vs. bottom) so they can never overlap, and the glyph
   // region clips so the image can't spill. The number is the reliable read for
@@ -100,10 +100,16 @@ function Tile({ tile, onClick, selected, dim, small }) {
       onClick={onClick}
       disabled={!onClick}
       aria-label={tile.label}
+      data-tileid={tile.id}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
       className={`relative flex shrink-0 flex-col items-center justify-between overflow-hidden rounded-lg border-2 bg-white shadow-md transition motion-reduce:transition-none
         ${onClick
           ? "cursor-pointer hover:-translate-y-1 focus:-translate-y-1 motion-reduce:hover:translate-y-0 motion-reduce:focus:translate-y-0 focus:outline-none focus:ring-4 focus:ring-red-400"
           : "cursor-default"}
+        ${draggable ? "touch-none" : ""}
+        ${dragging ? "opacity-80 ring-4 ring-amber-400 scale-105 shadow-xl z-10" : ""}
         ${selected ? "border-red-600 ring-4 ring-red-300 -translate-y-1 motion-reduce:translate-y-0" : "border-stone-400"}
         ${dim ? "opacity-70" : ""}`}
       style={{ width: w, height: h }}
@@ -161,6 +167,10 @@ export default function MahjongCoach() {
   const [listening, setListening] = useState(false);
   const [typed, setTyped] = useState("");
   const recogRef = useRef(null);
+  const rackRef = useRef(null); // the hand rack, for drag-to-rearrange measurements
+  const dragRef = useRef(null); // in-flight drag: { id, startX, moved }
+  const justDraggedRef = useRef(false); // suppress the click that fires after a drag
+  const [dragId, setDragId] = useState(null); // tile currently being dragged (for styling)
 
   const { speak, stop } = useSpeech(voiceOn);
   // SpeechRecognition (STT) is Chrome/Android-only and absent on iOS Safari,
@@ -284,7 +294,9 @@ export default function MahjongCoach() {
     const idx = mode === "learn" ? pickAssistedDrawIndex(w, hand) : 0;
     const t = w[idx];
     const rest = [...w.slice(0, idx), ...w.slice(idx + 1)];
-    const newHand = sortHand([...hand, t]);
+    // Append the new tile (don't re-sort) so her own arrangement is preserved;
+    // the fresh tile arrives at the end of the rack. "Tidy up" re-sorts on demand.
+    const newHand = [...hand, t];
     setWall(rest); setHand(newHand); setSelected([]);
     const full = [...newHand, ...exposed.flat()];
     if (mode === "learn" && isWinningHand(full)) { setPhase("won"); say("You did it! Four sets and a pair — that's a winning hand. Beautifully done."); return; }
@@ -294,7 +306,7 @@ export default function MahjongCoach() {
 
   const discardTile = (tile) => {
     if (phase !== "discard" || !tile) return;
-    const newHand = sortHand(hand.filter((t) => t.id !== tile.id));
+    const newHand = hand.filter((t) => t.id !== tile.id);
     setHand(newHand);
     setDiscards((d) => [...d, tile]);
     setSelected([]);
@@ -306,13 +318,55 @@ export default function MahjongCoach() {
     discardTile(hand.find((t) => t.id === selected[0]));
   };
 
+  // Re-sort the rack whenever she wants the game to organize it for her.
+  const tidyUp = () => { setSelected([]); setHand((h) => sortHand(h)); };
+
+  /* --- Drag to rearrange her own rack (touch + mouse, via Pointer Events).
+     A tap (no real movement) still selects; a drag past a small threshold
+     reorders. New draws append to the end so her arrangement is preserved. --- */
+  const canArrange = phase === "draw" || phase === "discard";
+  const onTilePointerDown = (e, tile) => {
+    if (!canArrange) return;
+    dragRef.current = { id: tile.id, startX: e.clientX, moved: false };
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* older browsers */ }
+  };
+  const onTilePointerMove = (e) => {
+    const d = dragRef.current;
+    if (!d) return;
+    if (!d.moved && Math.abs(e.clientX - d.startX) < 10) return; // tap, not a drag
+    if (!d.moved) { d.moved = true; setDragId(d.id); }
+    const kids = rackRef.current ? [...rackRef.current.querySelectorAll("[data-tileid]")] : [];
+    let target = 0; // insertion index among the OTHER tiles
+    for (const k of kids) {
+      if (k.dataset.tileid === d.id) continue;
+      const r = k.getBoundingClientRect();
+      if (e.clientX > r.left + r.width / 2) target++;
+    }
+    setHand((h) => {
+      const from = h.findIndex((t) => t.id === d.id);
+      if (from < 0) return h;
+      const arr = [...h];
+      const [m] = arr.splice(from, 1);
+      arr.splice(Math.max(0, Math.min(arr.length, target)), 0, m);
+      if (arr.every((t, i) => t.id === h[i].id)) return h; // no change — avoid churn
+      return arr;
+    });
+  };
+  const onTilePointerUp = (e) => {
+    const d = dragRef.current;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    if (d?.moved) justDraggedRef.current = true; // swallow the click that follows a drag
+    dragRef.current = null;
+    setDragId(null);
+  };
+
   // "Make this set" — lock three matching (Joker-wild) tiles down as a set.
   const makeSet = () => {
     if (!canMakeSet) return;
     const setTiles = hand.filter((t) => selected.includes(t.id));
     const keep = hand.filter((t) => !selected.includes(t.id));
     const newExposed = [...exposed, setTiles];
-    setHand(sortHand(keep));
+    setHand(keep);
     setExposed(newExposed);
     setSelected([]);
     const full = [...keep, ...newExposed.flat()];
@@ -329,7 +383,7 @@ export default function MahjongCoach() {
     }
     const newExposed = [...exposed, [makeTile(callable.key, callable.glyph, callable.label), makeTile(callable.key, callable.glyph, callable.label), callable]];
     setExposed(newExposed);
-    setHand(sortHand(keep));
+    setHand(keep);
     setCallable(null);
     setSelected([]);
     const full = [...keep, ...newExposed.flat()];
@@ -363,7 +417,6 @@ export default function MahjongCoach() {
   // Tapping a tile selects it (to discard or to make a set) — never an instant,
   // unrecoverable discard. Selection is live during the Charleston and her turn.
   const tileSelectable = inCharleston || phase === "draw" || phase === "discard";
-  const tileClick = (t) => (tileSelectable ? () => toggleSelect(t) : undefined);
 
   if (screen === "menu") {
     return (
@@ -470,20 +523,41 @@ export default function MahjongCoach() {
       )}
 
       <div className="w-full max-w-5xl mx-auto rounded-3xl bg-emerald-800/60 p-4 sm:p-5 mb-4">
-        <div className="text-sm uppercase tracking-widest text-emerald-300 mb-3 font-bold">
-          Your tiles
-          {inCharleston ? ` — tap 3 to pass (${selected.length}/3)`
-            : phase === "discard" ? " — tap a tile to let it go, or tap 3 matching to make a set"
-            : phase === "draw" ? " — take a tile, or tap 3 matching to make a set"
-            : ""}
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="text-sm uppercase tracking-widest text-emerald-300 font-bold">
+            Your tiles
+            {inCharleston ? ` — tap 3 to pass (${selected.length}/3)`
+              : phase === "discard" ? " — tap to let go, drag to rearrange"
+              : phase === "draw" ? " — drag to rearrange, or tap 3 to make a set"
+              : ""}
+          </div>
+          {canArrange && hand.length > 0 && (
+            <button onClick={tidyUp}
+              className="shrink-0 rounded-full bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-bold px-4 py-2 focus:outline-none focus:ring-4 focus:ring-amber-300">
+              Tidy up
+            </button>
+          )}
         </div>
         {/* Single-row rack lined up in front of the player (traditional layout).
-            Tiles are sorted by suit/number. The inner w-max + mx-auto centers
-            the rack when it fits and stays fully scrollable (left edge always
-            reachable) on a narrow tablet. */}
+            She can drag tiles to arrange them herself; new draws append to the
+            end and "Tidy up" re-sorts on demand. The inner w-max + mx-auto
+            centers the rack when it fits and stays fully scrollable on a narrow
+            tablet. */}
         <div className="overflow-x-auto px-1 py-1">
-          <div className="flex flex-nowrap gap-1.5 w-max mx-auto">
-            {hand.map((t) => <Tile key={t.id} tile={t} selected={selected.includes(t.id)} onClick={tileClick(t)} />)}
+          <div ref={rackRef} className="flex flex-nowrap gap-1.5 w-max mx-auto">
+            {hand.map((t) => (
+              <Tile key={t.id} tile={t} selected={selected.includes(t.id)}
+                draggable={canArrange}
+                dragging={dragId === t.id}
+                onPointerDown={canArrange ? (e) => onTilePointerDown(e, t) : undefined}
+                onPointerMove={canArrange ? onTilePointerMove : undefined}
+                onPointerUp={canArrange ? onTilePointerUp : undefined}
+                onClick={tileSelectable ? () => {
+                  if (justDraggedRef.current) { justDraggedRef.current = false; return; }
+                  toggleSelect(t);
+                } : undefined}
+              />
+            ))}
           </div>
         </div>
       </div>
