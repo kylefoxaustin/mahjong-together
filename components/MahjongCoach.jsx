@@ -87,7 +87,7 @@ function useSpeech(enabled) {
 }
 
 function Tile({ tile, onClick, selected, dim, small }) {
-  const w = small ? 76 : 104, h = small ? 104 : 144;
+  const w = small ? 80 : 110, h = small ? 116 : 168;
   // For low vision the WORDS are the reliable signal, not the tiny pips inside
   // the Unicode glyph — so suited tiles show a big number + suit, and the glyph
   // is kept as a smaller accent above. Honors/Jokers show their full name big.
@@ -105,7 +105,7 @@ function Tile({ tile, onClick, selected, dim, small }) {
         ${dim ? "opacity-70" : ""} bg-white shadow-lg`}
       style={{ width: w, height: h }}
     >
-      <span aria-hidden="true" className="text-stone-700" style={{ fontSize: tile.isJoker ? (small ? 22 : 30) : (small ? 30 : 42), lineHeight: 1 }}>{tile.glyph}</span>
+      <span aria-hidden="true" className="text-stone-700" style={{ fontSize: tile.isJoker ? (small ? 30 : 46) : (small ? 42 : 66), lineHeight: 1 }}>{tile.glyph}</span>
       {suited ? (
         <span className="flex flex-col items-center leading-none">
           <span className="font-black text-stone-900" style={{ fontSize: small ? 26 : 40 }}>{suited[1]}</span>
