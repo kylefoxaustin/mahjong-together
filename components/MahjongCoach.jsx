@@ -199,8 +199,12 @@ export default function MahjongCoach() {
   const [thinking, setThinking] = useState(false);
   const [voiceOn, setVoiceOn] = useState(true);
   const [listening, setListening] = useState(false);
+  const [interim, setInterim] = useState(""); // live words while she's speaking
   const [typed, setTyped] = useState("");
   const recogRef = useRef(null);
+  const finalTranscriptRef = useRef(""); // accumulates her finished phrases across pauses
+  const stoppingRef = useRef(false); // true once she's done (or silence) — so we send, not restart
+  const silenceTimerRef = useRef(null); // generous "she's gone quiet" auto-finish
   const rackRef = useRef(null); // the hand rack, for drag-to-rearrange measurements
   const dragRef = useRef(null); // in-flight drag: { id, startX, moved }
   const justDraggedRef = useRef(false); // suppress the click that fires after a drag
@@ -312,18 +316,28 @@ export default function MahjongCoach() {
   }, []);
 
   // "Start over" — wipe the saved game and return to a clean menu.
+  // Hard-stop the microphone with no callbacks firing (used on leave/unmount).
+  const cancelListening = useCallback(() => {
+    clearTimeout(silenceTimerRef.current);
+    const rec = recogRef.current;
+    if (rec) { rec.onresult = null; rec.onerror = null; rec.onend = null; try { rec.abort(); } catch { /* ignore */ } }
+    recogRef.current = null;
+    setListening(false); setInterim("");
+  }, []);
+
   const startOver = useCallback(() => {
     stop();
+    cancelListening();
     clearBotTimers();
     try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
     setHand([]); setWall([]); setExposed([]); setDiscards([]); setBotHands([[], [], []]);
     setBotDiscards([null, null, null]); setCallable(null); setSelected([]);
     setPhase("draw"); setCoach(""); setTarget(""); setMode("learn");
     setScreen("menu");
-  }, [stop]);
+  }, [stop, cancelListening]);
 
-  // Clear any pending opponent-turn timers if the component goes away.
-  useEffect(() => clearBotTimers, []);
+  // Clear any pending opponent-turn timers and stop the mic if the page goes away.
+  useEffect(() => () => { clearBotTimers(); cancelListening(); }, [cancelListening]);
 
   // Plain-English summary of exactly what she can do right now, so the coach
   // only ever suggests real on-screen actions (CLAUDE.md §12 — no impossible
@@ -564,16 +578,73 @@ export default function MahjongCoach() {
   };
   const checkCard = () => runCoach("I think I've finished my hand — can you check me against my card?");
 
+  // She controls when she's done. Recognition runs CONTINUOUSLY so a pause to
+  // think never cuts her off; it finishes only when she taps "I'm done" or
+  // after a long, generous silence. We accumulate her phrases and send once.
+  const SILENCE_MS = 12000;
+  const armSilenceTimer = () => {
+    clearTimeout(silenceTimerRef.current);
+    silenceTimerRef.current = setTimeout(() => finishListening(), SILENCE_MS);
+  };
+
   const startListening = () => {
-    if (!sttSupported) return;
+    if (!sttSupported || listening) return;
+    stop(); // don't let the coach talk over her
     const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new Rec();
-    rec.lang = "en-US"; rec.interimResults = false; rec.maxAlternatives = 1;
-    rec.onresult = (e) => { setListening(false); runCoach(e.results[0][0].transcript); };
-    rec.onerror = () => setListening(false);
-    rec.onend = () => setListening(false);
-    recogRef.current = rec; setListening(true); rec.start();
+    rec.lang = "en-US";
+    rec.continuous = true;     // keep listening through pauses
+    rec.interimResults = true; // show her what it's hearing
+    rec.maxAlternatives = 1;
+    finalTranscriptRef.current = "";
+    stoppingRef.current = false;
+
+    rec.onresult = (e) => {
+      let live = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) finalTranscriptRef.current += r[0].transcript + " ";
+        else live += r[0].transcript;
+      }
+      setInterim(live);
+      armSilenceTimer(); // she's still talking — reset the quiet countdown
+    };
+    rec.onerror = (ev) => {
+      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+        stoppingRef.current = true;
+        clearTimeout(silenceTimerRef.current);
+        setListening(false); setInterim("");
+        say("I can't reach the microphone. You can type your question instead.");
+      }
+      // other errors (no-speech, network, aborted) fall through to onend
+    };
+    rec.onend = () => {
+      if (stoppingRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        setListening(false);
+        const text = finalTranscriptRef.current.trim();
+        setInterim("");
+        if (text) runCoach(text);
+        else say("I didn't quite catch that — tap the mic and try again, or type your question.");
+      } else {
+        // The browser ended early (its own timeout) but she isn't done — keep going.
+        try { rec.start(); } catch { setListening(false); }
+      }
+    };
+    recogRef.current = rec;
+    setInterim("");
+    setListening(true);
+    try { rec.start(); } catch { setListening(false); }
+    armSilenceTimer();
   };
+
+  // Finish capturing and send what she said. (Reassigned via the ref pattern so
+  // the timer/handlers above can call it.)
+  function finishListening() {
+    stoppingRef.current = true;
+    clearTimeout(silenceTimerRef.current);
+    try { recogRef.current && recogRef.current.stop(); } catch { setListening(false); }
+  }
 
   const askTyped = () => { if (typed.trim()) { runCoach(typed.trim()); setTyped(""); } };
 
@@ -656,7 +727,13 @@ export default function MahjongCoach() {
     <Shell voiceOn={voiceOn} setVoiceOn={toggleVoice} onReset={startOver} resetLabel="Start over">
       <div className="w-full max-w-6xl mx-auto rounded-3xl bg-stone-50 text-emerald-950 p-5 sm:p-6 shadow-2xl mb-4 flex items-start gap-4" aria-live="polite">
         <div className="shrink-0 h-14 w-14 rounded-full bg-emerald-700 text-amber-200 flex items-center justify-center text-2xl font-black" aria-hidden="true">♪</div>
-        <p className="text-xl sm:text-2xl font-semibold leading-snug self-center">{thinking ? "Let me look at your tiles…" : coach}</p>
+        <p className="text-xl sm:text-2xl font-semibold leading-snug self-center">
+          {thinking
+            ? "Let me look at your tiles…"
+            : listening
+              ? (interim ? `“${interim}”` : "I'm listening — take your time, then tap “I'm done”.")
+              : coach}
+        </p>
       </div>
 
       <div className="w-full max-w-6xl mx-auto -mt-2 mb-3 text-center text-emerald-300 text-sm font-semibold">
@@ -803,10 +880,10 @@ export default function MahjongCoach() {
               <BadgeCheck size={26} /> Did I win?
             </button>
           )}
-          <button onClick={startListening} disabled={!sttSupported || listening || thinking}
+          <button onClick={listening ? finishListening : startListening} disabled={!sttSupported || thinking}
             className={`flex-1 rounded-2xl text-2xl font-bold py-5 flex items-center justify-center gap-3 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300
               ${listening ? "bg-red-500 text-white animate-pulse motion-reduce:animate-none" : "bg-emerald-600 hover:bg-emerald-500 text-white"}`}>
-            <Mic size={26} /> {listening ? "Listening…" : "Ask out loud"}
+            <Mic size={26} /> {listening ? "I'm done — ask" : "Ask out loud"}
           </button>
         </div>
       )}
