@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from "react";
 import { Volume2, VolumeX, Mic, HelpCircle, RotateCcw, ArrowRight, BadgeCheck } from "lucide-react";
-import { buildWall, sortHand, makeTile, isWinningHand, localHint } from "@/lib/tiles";
+import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, pickAssistedDrawIndex, shuffle } from "@/lib/tiles";
 import { buildSystemPrompt, callCoach } from "@/lib/coach";
 
 /* ------------------------------------------------------------------ *
@@ -107,6 +107,27 @@ function Tile({ tile, onClick, selected, dim, small }) {
   );
 }
 
+// One slot in the "Your goal" progress panel.
+function Slot({ state, label, pair }) {
+  const styles =
+    state === "done"
+      ? "bg-amber-400 border-amber-300 text-emerald-950"
+      : state === "partial"
+        ? "bg-emerald-700/50 border-emerald-400 text-emerald-50"
+        : "bg-emerald-900/40 border-emerald-700/70 text-emerald-600";
+  const status = state === "done" ? "done" : state === "partial" ? "in progress" : "not started yet";
+  return (
+    <div
+      role="img"
+      aria-label={`${label}: ${status}`}
+      className={`flex flex-col items-center justify-center rounded-2xl border-4 h-16 w-20 sm:w-24 ${styles}`}
+    >
+      <span className="text-2xl font-black leading-none" aria-hidden="true">{state === "done" ? "✓" : state === "partial" ? "…" : "•"}</span>
+      <span className="mt-0.5 text-[10px] sm:text-xs font-bold uppercase tracking-wide">{pair ? "Pair" : "Set"}</span>
+    </div>
+  );
+}
+
 export default function MahjongCoach() {
   const [screen, setScreen] = useState("menu");
   const [mode, setMode] = useState("learn");
@@ -118,6 +139,7 @@ export default function MahjongCoach() {
   const [selected, setSelected] = useState([]);
   const [botDiscards, setBotDiscards] = useState(["—", "—", "—"]);
   const [callable, setCallable] = useState(null);
+  const [discards, setDiscards] = useState([]); // spent tiles, recycled into the wall when it runs low
   const [phase, setPhase] = useState("draw");
   const [coach, setCoach] = useState("");
   const [thinking, setThinking] = useState(false);
@@ -138,6 +160,11 @@ export default function MahjongCoach() {
   );
 
   const allTiles = useMemo(() => [...hand, ...exposed.flat()], [hand, exposed]);
+  // Live read of how close she is to the goal — drives the panel + coaching.
+  const progress = useMemo(() => analyzeHand(hand, exposed.length), [hand, exposed]);
+  // Which three currently-selected concealed tiles (if any) form a valid set.
+  const selectedTiles = useMemo(() => hand.filter((t) => selected.includes(t.id)), [hand, selected]);
+  const canMakeSet = selected.length === 3 && isValidSet(selectedTiles);
   const say = useCallback((msg) => { setCoach(msg); speak(msg); }, [speak]);
 
   const startGame = useCallback((withCharleston) => {
@@ -145,6 +172,7 @@ export default function MahjongCoach() {
     const w = buildWall();
     const h = sortHand(w.splice(0, 13));
     setWall(w); setHand(h); setExposed([]); setSelected([]); setCallable(null);
+    setDiscards([]);
     setBotDiscards(["—", "—", "—"]);
     setScreen("game");
     if (mode === "learn" && withCharleston) {
@@ -158,18 +186,32 @@ export default function MahjongCoach() {
     }
   }, [mode, target, say, stop]);
 
+  // Plain-English summary of exactly what she can do right now, so the coach
+  // only ever suggests real on-screen actions (CLAUDE.md §12 — no impossible
+  // advice). Kept terse; it's context for the model, not read aloud.
+  const actionsForPhase = useCallback(() => {
+    if (phase === "draw") return `She can take a tile from the wall. She can also tap three matching tiles (Jokers count as wild) and press "Make this set" to lock a set in.`;
+    if (phase === "discard") return `She just drew. She should tap one tile and press "Let this tile go". She can first tap three matching tiles and press "Make this set" to lock a set in.`;
+    if (phase === "call") return `A tile on the table (${callable?.label}) would finish a set. She can press "Take it" or "Leave it".`;
+    return `It's a quiet moment; she's getting set up.`;
+  }, [phase, callable]);
+
   const runCoach = useCallback(async (question) => {
     setThinking(true);
-    const tilesStr = sortHand(allTiles).map((t) => t.label).join(", ");
+    const tilesStr = sortHand(hand).map((t) => t.label).join(", ");
     const sys = buildSystemPrompt(mode, target);
-    const exposedStr = exposed.length ? ` She has already set down (exposed): ${exposed.map((m) => m[0].label + " x3").join("; ")}.` : "";
+    const exposedStr = exposed.length ? ` She has already locked in these sets: ${exposed.map((m) => m[0].label + " set").join("; ")}.` : "";
+    const progressStr = mode === "learn"
+      ? ` Toward the goal she has ${progress.sets} of 4 sets done and ${progress.hasPair ? "her pair" : "no pair yet"}.`
+      : "";
+    const ctx = `Her tiles in hand: ${tilesStr}.${exposedStr}${progressStr}\nWhat she can do right now: ${actionsForPhase()}`;
     const userText = question
-      ? `Her tiles now: ${tilesStr}.${exposedStr}\n\nShe asked out loud: "${question}"\n\nAnswer her kindly and simply.`
-      : `It's her turn. Her tiles now: ${tilesStr}.${exposedStr}\n\nGive her one gentle suggestion about what to aim for or which tile to let go.`;
+      ? `${ctx}\n\nShe asked out loud: "${question}"\n\nAnswer her kindly and simply, and only suggest things she can actually do right now.`
+      : `${ctx}\n\nGive her ONE gentle suggestion for her next move, using only actions she can do right now.`;
     const reply = await callCoach(sys, userText);
     say(reply || localHint(allTiles));
     setThinking(false);
-  }, [allTiles, exposed, mode, target, say]);
+  }, [allTiles, hand, exposed, mode, target, progress, actionsForPhase, say]);
 
   const toggleSelect = (tile) => {
     setSelected((s) => s.includes(tile.id) ? s.filter((x) => x !== tile.id) : s.length < 3 ? [...s, tile.id] : s);
@@ -189,25 +231,41 @@ export default function MahjongCoach() {
     else say("That's the Charleston finished. Now the real game begins. Take a tile when you're ready.");
   };
 
+  // Top up the wall from the spent-tile pile so the game never dead-ends.
+  const topUp = useCallback((w, need) => {
+    if (w.length >= need || discards.length === 0) return w;
+    const merged = shuffle([...w, ...discards]);
+    setDiscards([]);
+    return merged;
+  }, [discards]);
+
   const botsPlay = useCallback((concealed) => {
-    setWall((w) => {
-      const picks = w.slice(0, 3);
-      setBotDiscards(picks.map((p) => p?.label || "—"));
-      const counts = {};
-      concealed.forEach((t) => { if (!t.isJoker) counts[t.key] = (counts[t.key] || 0) + 1; });
-      const claim = picks.find((p) => p && !p.isJoker && counts[p.key] >= 2) || null;
-      setCallable(claim);
-      setPhase(claim ? "call" : "draw");
-      if (claim) say(`That ${claim.label} would finish a set for you! Press "Take it" to grab it, or "Leave it" to wait.`);
-      return w.slice(3);
-    });
-  }, [say]);
+    const w = topUp(wall, 3);
+    const picks = w.slice(0, 3);
+    const rest = w.slice(3);
+    setBotDiscards(picks.map((p) => p?.label || "—"));
+    const counts = {};
+    concealed.forEach((t) => { if (!t.isJoker) counts[t.key] = (counts[t.key] || 0) + 1; });
+    const claim = picks.find((p) => p && !p.isJoker && counts[p.key] >= 2) || null;
+    // Spent bot tiles go to the discard pile — except the one she might claim.
+    setDiscards((d) => [...d, ...picks.filter((p) => p && p !== claim)]);
+    setWall(rest);
+    setCallable(claim);
+    setPhase(claim ? "call" : "draw");
+    if (claim) say(`That ${claim.label} would finish a set for you! Press "Take it" to grab it, or "Leave it" to wait.`);
+    else say("Your turn again — take a tile when you're ready.");
+  }, [wall, topUp, say]);
 
   const drawTile = () => {
-    if (phase !== "draw" || wall.length === 0) return;
-    const [t, ...rest] = wall;
+    if (phase !== "draw") return;
+    const w = topUp(wall, 1);
+    if (w.length === 0) { startGame(false); return; } // pile and wall both empty — fresh deal
+    // Guided win (learn mode): nudge a helpful tile her way; card mode draws straight.
+    const idx = mode === "learn" ? pickAssistedDrawIndex(w, hand) : 0;
+    const t = w[idx];
+    const rest = [...w.slice(0, idx), ...w.slice(idx + 1)];
     const newHand = sortHand([...hand, t]);
-    setWall(rest); setHand(newHand);
+    setWall(rest); setHand(newHand); setSelected([]);
     const full = [...newHand, ...exposed.flat()];
     if (mode === "learn" && isWinningHand(full)) { setPhase("won"); say("You did it! Four sets and a pair — that's a winning hand. Beautifully done."); return; }
     setPhase("discard");
@@ -215,10 +273,31 @@ export default function MahjongCoach() {
   };
 
   const discardTile = (tile) => {
-    if (phase !== "discard") return;
+    if (phase !== "discard" || !tile) return;
     const newHand = sortHand(hand.filter((t) => t.id !== tile.id));
     setHand(newHand);
+    setDiscards((d) => [...d, tile]);
+    setSelected([]);
     botsPlay(newHand);
+  };
+  // "Let this tile go" — discards the single selected tile.
+  const letItGo = () => {
+    if (phase !== "discard" || selected.length !== 1) return;
+    discardTile(hand.find((t) => t.id === selected[0]));
+  };
+
+  // "Make this set" — lock three matching (Joker-wild) tiles down as a set.
+  const makeSet = () => {
+    if (!canMakeSet) return;
+    const setTiles = hand.filter((t) => selected.includes(t.id));
+    const keep = hand.filter((t) => !selected.includes(t.id));
+    const newExposed = [...exposed, setTiles];
+    setHand(sortHand(keep));
+    setExposed(newExposed);
+    setSelected([]);
+    const full = [...keep, ...newExposed.flat()];
+    if (mode === "learn" && isWinningHand(full)) { setPhase("won"); say("That's four sets and a pair — you've won! Wonderful."); return; }
+    say(phase === "discard" ? "Lovely — that set is locked in and safe. Now let one tile go." : "Lovely — that set is locked in and safe. Take a tile when you're ready.");
   };
 
   const takeCall = () => {
@@ -228,14 +307,23 @@ export default function MahjongCoach() {
       if (removed < 2 && t.key === callable.key && !t.isJoker) { removed++; continue; }
       keep.push(t);
     }
-    setExposed((e) => [...e, [makeTile(callable.key, callable.glyph, callable.label), makeTile(callable.key, callable.glyph, callable.label), callable]]);
+    const newExposed = [...exposed, [makeTile(callable.key, callable.glyph, callable.label), makeTile(callable.key, callable.glyph, callable.label), callable]];
+    setExposed(newExposed);
     setHand(sortHand(keep));
     setCallable(null);
+    setSelected([]);
+    const full = [...keep, ...newExposed.flat()];
+    if (mode === "learn" && isWinningHand(full)) { setPhase("won"); say("You took the very tile you needed — four sets and a pair. You win! Beautiful."); return; }
     setPhase("discard");
     say("Nice grab — that set is locked in and safe. Now let one tile go.");
   };
 
-  const leaveCall = () => { setCallable(null); setPhase("draw"); say("No problem, we'll wait for a better one. Take a tile from the wall."); };
+  const leaveCall = () => {
+    setDiscards((d) => (callable ? [...d, callable] : d));
+    setCallable(null);
+    setPhase("draw");
+    say("No problem, we'll wait for a better one. Take a tile from the wall.");
+  };
   const checkCard = () => runCoach("I think I've finished my hand — can you check me against my card?");
 
   const startListening = () => {
@@ -252,7 +340,10 @@ export default function MahjongCoach() {
   const askTyped = () => { if (typed.trim()) { runCoach(typed.trim()); setTyped(""); } };
 
   const inCharleston = phase.startsWith("charleston");
-  const tileClick = (t) => phase === "discard" ? () => discardTile(t) : inCharleston ? () => toggleSelect(t) : undefined;
+  // Tapping a tile selects it (to discard or to make a set) — never an instant,
+  // unrecoverable discard. Selection is live during the Charleston and her turn.
+  const tileSelectable = inCharleston || phase === "draw" || phase === "discard";
+  const tileClick = (t) => (tileSelectable ? () => toggleSelect(t) : undefined);
 
   if (screen === "menu") {
     return (
@@ -318,6 +409,17 @@ export default function MahjongCoach() {
         </div>
       )}
 
+      {mode === "learn" && phase !== "won" && (
+        <div className="w-full max-w-5xl mx-auto mb-4 rounded-3xl bg-emerald-800/40 p-4">
+          <div className="text-sm uppercase tracking-widest text-emerald-300 mb-3 font-bold text-center">Your goal — four sets and a pair</div>
+          <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
+            {progress.setSlots.map((s, i) => <Slot key={i} state={s} label={`Set ${i + 1}`} />)}
+            <span className="text-emerald-300 text-3xl font-black px-1" aria-hidden="true">+</span>
+            <Slot state={progress.pairSlot} label="The pair" pair />
+          </div>
+        </div>
+      )}
+
       <div className="w-full max-w-5xl mx-auto grid grid-cols-3 gap-3 mb-4 text-center">
         {["Left player", "Across", "Right player"].map((name, i) => (
           <div key={name} className="rounded-xl bg-emerald-800/70 py-2 px-2">
@@ -329,7 +431,7 @@ export default function MahjongCoach() {
 
       {exposed.length > 0 && (
         <div className="w-full max-w-5xl mx-auto mb-3">
-          <div className="text-xs uppercase tracking-widest text-emerald-300 mb-2 font-bold">Sets you've set down</div>
+          <div className="text-xs uppercase tracking-widest text-emerald-300 mb-2 font-bold">Sets you've made — locked in &amp; safe</div>
           <div className="flex flex-wrap gap-2">
             {exposed.map((m, i) => m.map((t) => <Tile key={t.id + i} tile={t} small dim />))}
           </div>
@@ -339,12 +441,32 @@ export default function MahjongCoach() {
       <div className="w-full max-w-5xl mx-auto rounded-3xl bg-emerald-800/60 p-4 sm:p-5 mb-4">
         <div className="text-sm uppercase tracking-widest text-emerald-300 mb-3 font-bold">
           Your tiles
-          {phase === "discard" ? " — tap one to let it go" : inCharleston ? ` — tap 3 to pass (${selected.length}/3)` : ""}
+          {inCharleston ? ` — tap 3 to pass (${selected.length}/3)`
+            : phase === "discard" ? " — tap a tile to let it go, or tap 3 matching to make a set"
+            : phase === "draw" ? " — take a tile, or tap 3 matching to make a set"
+            : ""}
         </div>
         <div className="flex flex-wrap gap-3 justify-center">
           {hand.map((t) => <Tile key={t.id} tile={t} selected={selected.includes(t.id)} onClick={tileClick(t)} />)}
         </div>
       </div>
+
+      {(phase === "draw" || phase === "discard") && selected.length > 0 && (
+        <div className="w-full max-w-5xl mx-auto flex gap-3 mb-3">
+          {selected.length === 3 && (
+            <button onClick={makeSet} disabled={!canMakeSet}
+              className="flex-1 rounded-2xl bg-amber-500 text-emerald-950 text-xl font-black py-4 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
+              {canMakeSet ? "Make this set ✓" : "Those three don't match"}
+            </button>
+          )}
+          {phase === "discard" && selected.length === 1 && (
+            <button onClick={letItGo}
+              className="flex-1 rounded-2xl bg-emerald-700 hover:bg-emerald-600 text-white text-xl font-bold py-4 focus:outline-none focus:ring-4 focus:ring-amber-300">
+              Let this tile go
+            </button>
+          )}
+        </div>
+      )}
 
       {inCharleston ? (
         <div className="w-full max-w-5xl mx-auto flex gap-3 mb-4">
@@ -360,9 +482,9 @@ export default function MahjongCoach() {
         </div>
       ) : (
         <div className="w-full max-w-5xl mx-auto flex flex-col sm:flex-row gap-3 mb-4">
-          <button onClick={drawTile} disabled={phase !== "draw" || wall.length === 0}
+          <button onClick={phase === "won" ? () => startGame(mode === "learn") : drawTile} disabled={phase !== "draw" && phase !== "won"}
             className="flex-1 rounded-2xl bg-amber-500 enabled:hover:bg-amber-400 text-emerald-950 text-2xl font-black py-5 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
-            {phase === "won" ? "You won! 🎉" : "Take a tile"}
+            {phase === "won" ? "Play again 🎉" : "Take a tile"}
           </button>
           <button onClick={() => runCoach()} disabled={thinking || hand.length === 0}
             className="flex-1 rounded-2xl bg-emerald-600 enabled:hover:bg-emerald-500 text-white text-2xl font-bold py-5 flex items-center justify-center gap-3 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
