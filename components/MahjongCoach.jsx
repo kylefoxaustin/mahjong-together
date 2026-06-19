@@ -5,6 +5,10 @@ import { Volume2, VolumeX, Mic, HelpCircle, RotateCcw, ArrowRight, BadgeCheck } 
 import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, pickAssistedDrawIndex, shuffle, coachFacts } from "@/lib/tiles";
 import { buildSystemPrompt, callCoach } from "@/lib/coach";
 
+// Where the in-progress game is auto-saved on her device (localStorage). Bump
+// the version suffix if the saved shape ever changes, to avoid restoring stale data.
+const SAVE_KEY = "mahjong-together:v1";
+
 /* ------------------------------------------------------------------ *
  *  Mahjong, Together — coach + game UI (ported from the v0.2 artifact)
  *
@@ -91,9 +95,9 @@ function Tile({ tile, onClick, selected, dim, small, draggable, dragging, onPoin
   // OWN fixed regions (top vs. bottom) so they can never overlap, and the glyph
   // region clips so the image can't spill. The number is the reliable read for
   // low vision; the glyph is the picture above it.
-  const w = small ? 50 : 66, h = small ? 70 : 94;
-  const glyphBox = small ? 38 : 50;
-  const glyphSize = tile.isJoker ? (small ? 22 : 30) : (small ? 28 : 38);
+  const w = small ? 58 : 84, h = small ? 82 : 118;
+  const glyphBox = small ? 44 : 64;
+  const glyphSize = tile.isJoker ? (small ? 24 : 36) : (small ? 30 : 48);
   const suited = /^(\d) (Crak|Bam|Dot)$/.exec(tile.label);
   return (
     <button
@@ -117,11 +121,11 @@ function Tile({ tile, onClick, selected, dim, small, draggable, dragging, onPoin
       <span aria-hidden="true" className="flex w-full items-center justify-center overflow-hidden text-stone-700" style={{ height: glyphBox, fontSize: glyphSize, lineHeight: 1 }}>{tile.glyph}</span>
       {suited ? (
         <span className="flex flex-col items-center leading-none pb-1">
-          <span className="font-black text-stone-900" style={{ fontSize: small ? 16 : 22 }}>{suited[1]}</span>
-          <span className="font-bold text-stone-600 uppercase tracking-wide" style={{ fontSize: small ? 8 : 10 }}>{suited[2]}</span>
+          <span className="font-black text-stone-900" style={{ fontSize: small ? 18 : 30 }}>{suited[1]}</span>
+          <span className="font-bold text-stone-600 uppercase tracking-wide" style={{ fontSize: small ? 8 : 13 }}>{suited[2]}</span>
         </span>
       ) : (
-        <span className="font-black text-stone-900 text-center leading-tight px-0.5 pb-1" style={{ fontSize: small ? 9 : 11 }}>{tile.label}</span>
+        <span className="font-black text-stone-900 text-center leading-tight px-0.5 pb-1" style={{ fontSize: small ? 9 : 13 }}>{tile.label}</span>
       )}
     </button>
   );
@@ -171,6 +175,7 @@ export default function MahjongCoach() {
   const dragRef = useRef(null); // in-flight drag: { id, startX, moved }
   const justDraggedRef = useRef(false); // suppress the click that fires after a drag
   const [dragId, setDragId] = useState(null); // tile currently being dragged (for styling)
+  const hydratedRef = useRef(false); // becomes true once a saved game has been restored (or none found)
 
   const { speak, stop } = useSpeech(voiceOn);
   // SpeechRecognition (STT) is Chrome/Android-only and absent on iOS Safari,
@@ -191,6 +196,47 @@ export default function MahjongCoach() {
   const canMakeSet = selected.length === 3 && isValidSet(selectedTiles);
   const say = useCallback((msg) => { setCoach(msg); speak(msg); }, [speak]);
 
+  // Restore an auto-saved game on first load (client only, so no SSR mismatch).
+  // We set the coach text without speaking, so reopening is silent. Hydrating
+  // several fields from storage on mount is intentional here.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      const s = raw && JSON.parse(raw);
+      if (s && s.screen === "game" && Array.isArray(s.hand)) {
+        setMode(s.mode || "learn");
+        setTarget(s.target || "");
+        setWall(s.wall || []);
+        setHand(s.hand || []);
+        setExposed(s.exposed || []);
+        setDiscards(s.discards || []);
+        setBotDiscards(s.botDiscards || [null, null, null]);
+        setCallable(s.callable || null);
+        setPhase(s.phase || "draw");
+        setCoach(s.coach || "");
+        if (typeof s.voiceOn === "boolean") setVoiceOn(s.voiceOn);
+        setScreen("game");
+      }
+    } catch { /* corrupt or unavailable storage — start fresh */ }
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // Auto-save the in-progress game whenever it changes (no buttons, no prompts).
+  // The first run is skipped so it can't clobber the save before restore lands.
+  useEffect(() => {
+    if (!hydratedRef.current) { hydratedRef.current = true; return; }
+    try {
+      if (screen === "game") {
+        localStorage.setItem(SAVE_KEY, JSON.stringify({
+          screen, mode, target, wall, hand, exposed, discards, botDiscards, callable, phase, coach, voiceOn,
+        }));
+      } else {
+        localStorage.removeItem(SAVE_KEY); // back at the menu — nothing to resume
+      }
+    } catch { /* storage full or unavailable — ignore, game still works */ }
+  }, [screen, mode, target, wall, hand, exposed, discards, botDiscards, callable, phase, coach, voiceOn]);
+
   const startGame = useCallback((withCharleston) => {
     stop();
     const w = buildWall();
@@ -209,6 +255,16 @@ export default function MahjongCoach() {
         : "Here are your 13 tiles. Take a tile from the wall and we'll figure out the rest together.");
     }
   }, [mode, target, say, stop]);
+
+  // "Start over" — wipe the saved game and return to a clean menu.
+  const startOver = useCallback(() => {
+    stop();
+    try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
+    setHand([]); setWall([]); setExposed([]); setDiscards([]);
+    setBotDiscards([null, null, null]); setCallable(null); setSelected([]);
+    setPhase("draw"); setCoach(""); setTarget(""); setMode("learn");
+    setScreen("menu");
+  }, [stop]);
 
   // Plain-English summary of exactly what she can do right now, so the coach
   // only ever suggests real on-screen actions (CLAUDE.md §12 — no impossible
@@ -470,7 +526,7 @@ export default function MahjongCoach() {
   }
 
   return (
-    <Shell voiceOn={voiceOn} setVoiceOn={() => { stop(); setVoiceOn((v) => !v); }} onReset={() => setScreen("menu")} resetLabel="Menu">
+    <Shell voiceOn={voiceOn} setVoiceOn={() => { stop(); setVoiceOn((v) => !v); }} onReset={startOver} resetLabel="Start over">
       <div className="w-full max-w-5xl mx-auto rounded-3xl bg-stone-50 text-emerald-950 p-5 sm:p-6 shadow-2xl mb-4 flex items-start gap-4" aria-live="polite">
         <div className="shrink-0 h-14 w-14 rounded-full bg-emerald-700 text-amber-200 flex items-center justify-center text-2xl font-black" aria-hidden="true">♪</div>
         <p className="text-xl sm:text-2xl font-semibold leading-snug self-center">{thinking ? "Let me look at your tiles…" : coach}</p>
