@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from "react";
-import { Volume2, VolumeX, Mic, HelpCircle, RotateCcw, ArrowRight, BadgeCheck } from "lucide-react";
-import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, pickAssistedDrawIndex, shuffle, coachFacts, chooseDiscard, decomposeWin } from "@/lib/tiles";
+import { Volume2, VolumeX, Mic, HelpCircle, RotateCcw, ArrowRight, BadgeCheck, Lightbulb, LightbulbOff } from "lucide-react";
+import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, pickAssistedDrawIndex, shuffle, coachFacts, chooseDiscard, decomposeWin, handGroups } from "@/lib/tiles";
 import { buildSystemPrompt, callCoach } from "@/lib/coach";
 
 // Where the in-progress game is auto-saved on her device (localStorage). Bump
@@ -24,6 +24,7 @@ const DIFFICULTY = {
 };
 const DIFF_ORDER = ["easy", "normal", "hard", "advanced"];
 const DIFF_KEY = "mahjong-together:difficulty"; // remembers her last choice across visits
+const HINTS_KEY = "mahjong-together:hints"; // remembers the on-screen-hints toggle
 
 /* ------------------------------------------------------------------ *
  *  Mahjong, Together — coach + game UI (ported from the v0.2 artifact)
@@ -163,21 +164,29 @@ function Tile({ tile, onClick, selected, dim, small, draggable, dragging, fill, 
 }
 
 // One slot in the "Your goal" progress panel.
+//  locked  = committed/exposed (or won) → SOLID gold ✓ ("locked in & safe")
+//  held    = she's holding the tiles but hasn't committed → gold OUTLINE (hollow)
+//  building= a pair working toward a set → dim "…"
+//  empty   = nothing yet
 function Slot({ state, label, pair }) {
   const styles =
-    state === "done"
-      ? "bg-amber-400 border-amber-300 text-emerald-950"
-      : state === "partial"
-        ? "bg-emerald-700/50 border-emerald-400 text-emerald-50"
-        : "bg-emerald-900/40 border-emerald-700/70 text-emerald-600";
-  const status = state === "done" ? "done" : state === "partial" ? "in progress" : "not started yet";
+    state === "locked"
+      ? "bg-amber-400 border-amber-300 text-emerald-950" // solid
+      : state === "held"
+        ? "bg-transparent border-amber-400 text-amber-300" // outline only
+        : state === "building"
+          ? "bg-emerald-700/40 border-emerald-500 text-emerald-100"
+          : "bg-emerald-900/40 border-emerald-700/70 text-emerald-600";
+  const status =
+    state === "locked" ? "locked in" : state === "held" ? "you have it — not locked yet" : state === "building" ? "in progress" : "not started yet";
+  const mark = state === "locked" ? "✓" : state === "held" ? "○" : state === "building" ? "…" : "•";
   return (
     <div
       role="img"
-      aria-label={`${label}: ${status}`}
+      aria-label={`${pair ? "Pair" : label}: ${status}`}
       className={`flex flex-col items-center justify-center rounded-2xl border-4 h-16 w-20 sm:w-24 ${styles}`}
     >
-      <span className="text-2xl font-black leading-none" aria-hidden="true">{state === "done" ? "✓" : state === "partial" ? "…" : "•"}</span>
+      <span className="text-2xl font-black leading-none" aria-hidden="true">{mark}</span>
       <span className="mt-0.5 text-[10px] sm:text-xs font-bold uppercase tracking-wide">{pair ? "Pair" : "Set"}</span>
     </div>
   );
@@ -202,6 +211,7 @@ export default function MahjongCoach() {
   const [coach, setCoach] = useState("");
   const [thinking, setThinking] = useState(false);
   const [voiceOn, setVoiceOn] = useState(true);
+  const [hintsOn, setHintsOn] = useState(true); // on-screen highlighting of tiles/sets
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState(""); // live words while she's speaking
   const [typed, setTyped] = useState("");
@@ -231,8 +241,25 @@ export default function MahjongCoach() {
   const allTiles = useMemo(() => [...hand, ...exposed.flat()], [hand, exposed]);
   // When she wins, work out ONE clear way the 14 tiles make 4 sets + a pair.
   const winBreakdown = useMemo(() => (phase === "won" ? decomposeWin(allTiles) : null), [phase, allTiles]);
-  // Live read of how close she is to the goal — drives the panel + coaching.
-  const progress = useMemo(() => analyzeHand(hand, exposed.length), [hand, exposed]);
+  // The actual tiles she's holding toward the goal — drives the panel slots and
+  // (when hints are on) the gold highlight on the matching tiles.
+  const groups = useMemo(() => handGroups(hand), [hand]);
+  const goalSlots = useMemo(() => {
+    const locked = Math.min(4, exposed.length);
+    const slots = [];
+    for (let i = 0; i < 4; i++) {
+      if (i < locked) slots.push("locked");
+      else if (i < locked + groups.sets.length) slots.push("held");
+      else if (i < locked + groups.sets.length + groups.building.length) slots.push("building");
+      else slots.push("empty");
+    }
+    return { setSlots: slots, pairState: groups.pair ? "held" : "empty" };
+  }, [exposed, groups]);
+  // Tiles the panel is pointing at (her pair + the sets she's holding).
+  const hintIds = useMemo(
+    () => new Set([...(groups.pair || []), ...groups.sets.flat()].map((t) => t.id)),
+    [groups],
+  );
   // Which three currently-selected concealed tiles (if any) form a valid set.
   const selectedTiles = useMemo(() => hand.filter((t) => selected.includes(t.id)), [hand, selected]);
   const canMakeSet = selected.length === 3 && isValidSet(selectedTiles);
@@ -246,6 +273,16 @@ export default function MahjongCoach() {
     else { setVoiceOn(true); speak(coach || "Voice is on. I'll read everything to you."); }
   }, [voiceOn, coach, speak, stop]);
 
+  // On-screen hints = the gold tile highlighting (coach suggestions + the goal
+  // panel's "you're holding these" outline). Remembered across visits.
+  const toggleHints = useCallback(() => {
+    setHintsOn((on) => {
+      const next = !on;
+      try { localStorage.setItem(HINTS_KEY, next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+
   // Restore an auto-saved game on first load (client only, so no SSR mismatch).
   // We set the coach text without speaking, so reopening is silent. Hydrating
   // several fields from storage on mount is intentional here.
@@ -254,6 +291,8 @@ export default function MahjongCoach() {
     try {
       const pref = localStorage.getItem(DIFF_KEY);
       if (pref && DIFFICULTY[pref]) setDifficulty(pref); // remembered menu choice
+      const hp = localStorage.getItem(HINTS_KEY);
+      if (hp === "0") setHintsOn(false);
       const raw = localStorage.getItem(SAVE_KEY);
       const s = raw && JSON.parse(raw);
       if (s && s.screen === "game" && Array.isArray(s.hand)) {
@@ -745,7 +784,7 @@ export default function MahjongCoach() {
 
   if (phase === "won") {
     return (
-      <Shell voiceOn={voiceOn} setVoiceOn={toggleVoice} onReset={startOver} resetLabel="Start over">
+      <Shell voiceOn={voiceOn} setVoiceOn={toggleVoice} hintsOn={hintsOn} onToggleHints={toggleHints} onReset={startOver} resetLabel="Start over">
         <div className="w-full max-w-6xl mx-auto rounded-3xl bg-stone-50 text-emerald-950 p-5 sm:p-6 shadow-2xl mb-4 flex items-start gap-4" aria-live="polite">
           <div className="shrink-0 h-14 w-14 rounded-full bg-emerald-700 text-amber-200 flex items-center justify-center text-2xl font-black" aria-hidden="true">♪</div>
           <p className="text-xl sm:text-2xl font-semibold leading-snug self-center">{coach}</p>
@@ -785,7 +824,7 @@ export default function MahjongCoach() {
   }
 
   return (
-    <Shell voiceOn={voiceOn} setVoiceOn={toggleVoice} onReset={startOver} resetLabel="Start over">
+    <Shell voiceOn={voiceOn} setVoiceOn={toggleVoice} hintsOn={hintsOn} onToggleHints={toggleHints} onReset={startOver} resetLabel="Start over">
       <div className="w-full max-w-6xl mx-auto rounded-3xl bg-stone-50 text-emerald-950 p-5 sm:p-6 shadow-2xl mb-4 flex items-start gap-4" aria-live="polite">
         <div className="shrink-0 h-14 w-14 rounded-full bg-emerald-700 text-amber-200 flex items-center justify-center text-2xl font-black" aria-hidden="true">♪</div>
         <p className="text-xl sm:text-2xl font-semibold leading-snug self-center">
@@ -811,12 +850,12 @@ export default function MahjongCoach() {
         <div className="w-full max-w-6xl mx-auto mb-4 rounded-3xl bg-emerald-800/40 p-4">
           <div className="text-sm uppercase tracking-widest text-emerald-300 mb-3 font-bold text-center">Your goal — four sets and a pair</div>
           <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
-            {progress.setSlots.map((s, i) => <Slot key={i} state={s} label={`Set ${i + 1}`} />)}
+            {goalSlots.setSlots.map((s, i) => <Slot key={i} state={s} label={`Set ${i + 1}`} />)}
             <span className="text-emerald-300 text-3xl font-black px-1" aria-hidden="true">+</span>
-            <Slot state={progress.pairSlot} label="The pair" pair />
+            <Slot state={goalSlots.pairState} label="The pair" pair />
           </div>
           <p className="text-center text-emerald-300 text-xs sm:text-sm mt-3">
-            Gold ✓ means you've got it — a set you've locked in, or a matching pair. A dot (…) means you're still building it. Tap three matching tiles, then “Make this set,” to lock a set in.
+            Solid gold ✓ = locked in &amp; safe. A gold <span className="text-amber-300 font-bold">outline ○</span> means you're holding those tiles{hintsOn ? " (lit up below)" : ""} but haven't locked them — tap three matching tiles, then “Make this set,” to lock them in.
           </p>
         </div>
       )}
@@ -874,7 +913,7 @@ export default function MahjongCoach() {
           <div ref={rackRef} className="flex flex-nowrap gap-1.5 w-full justify-center">
             {hand.map((t) => (
               <Tile key={t.id} tile={t} selected={selected.includes(t.id)} fill
-                highlight={highlightIds.includes(t.id)}
+                highlight={hintsOn && (hintIds.has(t.id) || highlightIds.includes(t.id))}
                 draggable={canArrange}
                 dragging={dragId === t.id}
                 onPointerDown={canArrange ? (e) => onTilePointerDown(e, t) : undefined}
@@ -969,10 +1008,15 @@ export default function MahjongCoach() {
   );
 }
 
-function Shell({ children, voiceOn, setVoiceOn, onReset, resetLabel = "Deal new tiles", hideReset }) {
+function Shell({ children, voiceOn, setVoiceOn, hintsOn, onToggleHints, onReset, resetLabel = "Deal new tiles", hideReset }) {
   return (
     <div className="min-h-screen w-full bg-emerald-900 text-stone-100 p-4 sm:p-6">
-      <div className="w-full max-w-6xl mx-auto flex items-center justify-end gap-2 mb-4">
+      <div className="w-full max-w-6xl mx-auto flex items-center justify-end gap-2 mb-4 flex-wrap">
+        {onToggleHints && (
+          <button onClick={onToggleHints} aria-pressed={hintsOn} className="flex items-center gap-2 rounded-full bg-emerald-700 hover:bg-emerald-600 px-4 py-2 text-base font-bold focus:outline-none focus:ring-4 focus:ring-amber-300">
+            {hintsOn ? <Lightbulb size={22} /> : <LightbulbOff size={22} />}{hintsOn ? "Hints on" : "Hints off"}
+          </button>
+        )}
         <button onClick={setVoiceOn} aria-pressed={voiceOn} className="flex items-center gap-2 rounded-full bg-emerald-700 hover:bg-emerald-600 px-4 py-2 text-base font-bold focus:outline-none focus:ring-4 focus:ring-amber-300">
           {voiceOn ? <Volume2 size={22} /> : <VolumeX size={22} />}{voiceOn ? "Voice on" : "Voice off"}
         </button>
