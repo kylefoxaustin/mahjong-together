@@ -807,7 +807,7 @@ export default function MahjongCoach() {
         </div>
       )}
 
-      {mode === "learn" && phase !== "won" && phase !== "botwon" && (
+      {mode === "learn" && !inCharleston && phase !== "won" && phase !== "botwon" && (
         <div className="w-full max-w-6xl mx-auto mb-4 rounded-3xl bg-emerald-800/40 p-4">
           <div className="text-sm uppercase tracking-widest text-emerald-300 mb-3 font-bold text-center">Your goal — four sets and a pair</div>
           <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
