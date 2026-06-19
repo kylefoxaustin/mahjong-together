@@ -263,6 +263,9 @@ export default function MahjongCoach() {
   // Which three currently-selected concealed tiles (if any) form a valid set.
   const selectedTiles = useMemo(() => hand.filter((t) => selected.includes(t.id)), [hand, selected]);
   const canMakeSet = selected.length === 3 && isValidSet(selectedTiles);
+  // She can declare a win only when she actually holds one (her 14 tiles), and
+  // it's her turn — she decides WHEN, the game never finishes it for her.
+  const canDeclareWin = mode === "learn" && phase === "discard" && isWinningHand(allTiles);
   const say = useCallback((msg) => { setCoach(msg); if (voiceOn) speak(msg); }, [voiceOn, speak]);
 
   // Voice on/off. Turning it ON speaks the current coaching line immediately
@@ -532,12 +535,23 @@ export default function MahjongCoach() {
     // the fresh tile arrives at the end of the rack. "Tidy up" re-sorts on demand.
     const newHand = [...hand, t];
     setWall(rest); setHand(newHand); setSelected([]);
-    const full = [...newHand, ...exposed.flat()];
-    if (mode === "learn" && isWinningHand(full)) { setPhase("won"); say("You did it! Four sets and a pair — that's a winning hand. Beautifully done."); return; }
     setPhase("discard");
-    // Pass the fresh hand + phase — state set above isn't applied yet, and the
-    // coach must advise on the discard step (the just-drawn tile included).
-    runCoach(undefined, { hand: newHand, phase: "discard" });
+    // Never auto-declare — she decides when to finish. If she now holds a
+    // winning hand, point her to the "I think I won!" button; otherwise coach.
+    const full = [...newHand, ...exposed.flat()];
+    if (mode === "learn" && isWinningHand(full)) {
+      say("Wonderful — I think you have a winning hand! When you're ready, press “I think I won!” to finish. You can keep arranging or locking sets first if you like.");
+    } else {
+      // Pass the fresh hand + phase — state set above isn't applied yet, and the
+      // coach must advise on the discard step (the just-drawn tile included).
+      runCoach(undefined, { hand: newHand, phase: "discard" });
+    }
+  };
+
+  // She declares the win herself (the button only shows when she truly has one).
+  const declareWin = () => {
+    setPhase("won");
+    say("You did it! Four sets and a pair — that's a winning hand. Beautifully done.");
   };
 
   const discardTile = (tile) => {
@@ -606,8 +620,11 @@ export default function MahjongCoach() {
     setExposed(newExposed);
     setSelected([]);
     const full = [...keep, ...newExposed.flat()];
-    if (mode === "learn" && isWinningHand(full)) { setPhase("won"); say("That's four sets and a pair — you've won! Wonderful."); return; }
-    say(phase === "discard" ? "Lovely — that set is locked in and safe. Now let one tile go." : "Lovely — that set is locked in and safe. Take a tile when you're ready.");
+    if (mode === "learn" && phase === "discard" && isWinningHand(full)) {
+      say("Lovely — that set is locked in, and I think you have a winning hand now! Press “I think I won!” when you're ready.");
+    } else {
+      say(phase === "discard" ? "Lovely — that set is locked in and safe. Now let one tile go." : "Lovely — that set is locked in and safe. Take a tile when you're ready.");
+    }
   };
 
   const takeCall = () => {
@@ -623,10 +640,13 @@ export default function MahjongCoach() {
     setDiscards((d) => d.filter((x) => x !== callable)); // taken off the table
     setCallable(null);
     setSelected([]);
-    const full = [...keep, ...newExposed.flat()];
-    if (mode === "learn" && isWinningHand(full)) { setPhase("won"); say("You took the very tile you needed — four sets and a pair. You win! Beautiful."); return; }
     setPhase("discard");
-    say("Nice grab — that set is locked in and safe. Now let one tile go.");
+    const full = [...keep, ...newExposed.flat()];
+    if (mode === "learn" && isWinningHand(full)) {
+      say("Nice grab — and I think that completes a winning hand! Press “I think I won!” when you're ready, or keep arranging first.");
+    } else {
+      say("Nice grab — that set is locked in and safe. Now let one tile go.");
+    }
   };
 
   const leaveCall = () => {
@@ -839,6 +859,16 @@ export default function MahjongCoach() {
       <div className="w-full max-w-6xl mx-auto -mt-2 mb-3 text-center text-emerald-300 text-sm font-semibold">
         Level: {DIFFICULTY[difficulty].label}
       </div>
+
+      {canDeclareWin && (
+        <div className="w-full max-w-6xl mx-auto mb-4">
+          <button onClick={declareWin}
+            className="w-full rounded-2xl bg-amber-500 hover:bg-amber-400 text-emerald-950 text-2xl sm:text-3xl font-black py-6 shadow-2xl focus:outline-none focus:ring-4 focus:ring-amber-300 motion-safe:animate-pulse motion-reduce:animate-none">
+            I think I won! 🎉
+          </button>
+          <p className="text-center text-emerald-200 text-sm mt-2">No rush — lock in or arrange your tiles however you like first.</p>
+        </div>
+      )}
 
       {mode === "card" && (
         <div className="w-full max-w-6xl mx-auto mb-3 text-center text-amber-200 text-base font-semibold">
