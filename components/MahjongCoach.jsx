@@ -87,7 +87,11 @@ function useSpeech(enabled) {
 }
 
 function Tile({ tile, onClick, selected, dim, small }) {
-  const w = small ? 60 : 84, h = small ? 84 : 116;
+  const w = small ? 76 : 104, h = small ? 104 : 144;
+  // For low vision the WORDS are the reliable signal, not the tiny pips inside
+  // the Unicode glyph — so suited tiles show a big number + suit, and the glyph
+  // is kept as a smaller accent above. Honors/Jokers show their full name big.
+  const suited = /^(\d) (Crak|Bam|Dot)$/.exec(tile.label);
   return (
     <button
       onClick={onClick}
@@ -97,12 +101,19 @@ function Tile({ tile, onClick, selected, dim, small }) {
         ${onClick
           ? "cursor-pointer hover:-translate-y-2 focus:-translate-y-2 motion-reduce:hover:translate-y-0 motion-reduce:focus:translate-y-0 focus:outline-none focus:ring-4 focus:ring-red-400"
           : "cursor-default"}
-        ${selected ? "border-red-500 -translate-y-2 motion-reduce:translate-y-0" : "border-stone-300"}
-        ${dim ? "opacity-50" : ""} bg-stone-50 shadow-lg`}
+        ${selected ? "border-red-600 ring-4 ring-red-300 -translate-y-2 motion-reduce:translate-y-0" : "border-stone-400"}
+        ${dim ? "opacity-70" : ""} bg-white shadow-lg`}
       style={{ width: w, height: h }}
     >
-      <span style={{ fontSize: tile.isJoker ? (small ? 24 : 34) : (small ? 40 : 56), lineHeight: 1 }}>{tile.glyph}</span>
-      <span className="mt-1 text-[10px] sm:text-xs font-bold uppercase tracking-wide text-stone-500">{tile.label}</span>
+      <span aria-hidden="true" className="text-stone-700" style={{ fontSize: tile.isJoker ? (small ? 22 : 30) : (small ? 30 : 42), lineHeight: 1 }}>{tile.glyph}</span>
+      {suited ? (
+        <span className="flex flex-col items-center leading-none">
+          <span className="font-black text-stone-900" style={{ fontSize: small ? 26 : 40 }}>{suited[1]}</span>
+          <span className="font-black text-stone-700 uppercase tracking-wide" style={{ fontSize: small ? 11 : 16 }}>{suited[2]}</span>
+        </span>
+      ) : (
+        <span className="font-black text-stone-900 text-center leading-tight px-1" style={{ fontSize: small ? 12 : 18 }}>{tile.label}</span>
+      )}
     </button>
   );
 }
@@ -452,26 +463,36 @@ export default function MahjongCoach() {
       </div>
 
       {(phase === "draw" || phase === "discard") && selected.length > 0 && (
-        <div className="w-full max-w-5xl mx-auto flex gap-3 mb-3">
-          {selected.length === 3 && (
+        <div className="w-full max-w-5xl mx-auto flex flex-wrap items-center gap-3 mb-3">
+          {selected.length === 3 ? (
             <button onClick={makeSet} disabled={!canMakeSet}
-              className="flex-1 rounded-2xl bg-amber-500 text-emerald-950 text-xl font-black py-4 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
-              {canMakeSet ? "Make this set ✓" : "Those three don't match"}
+              className="flex-1 min-w-[12rem] rounded-2xl bg-amber-500 text-emerald-950 text-xl font-black py-4 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
+              {canMakeSet ? "Make this set ✓" : "Those three don't match — try again"}
             </button>
-          )}
-          {phase === "discard" && selected.length === 1 && (
+          ) : phase === "discard" && selected.length === 1 ? (
             <button onClick={letItGo}
-              className="flex-1 rounded-2xl bg-emerald-700 hover:bg-emerald-600 text-white text-xl font-bold py-4 focus:outline-none focus:ring-4 focus:ring-amber-300">
+              className="flex-1 min-w-[12rem] rounded-2xl bg-emerald-700 hover:bg-emerald-600 text-white text-xl font-bold py-4 focus:outline-none focus:ring-4 focus:ring-amber-300">
               Let this tile go
             </button>
+          ) : (
+            <p className="flex-1 min-w-[12rem] text-emerald-100 text-lg font-semibold self-center">
+              {selected.length === 2
+                ? "That's a pair! Tap one more matching tile to make a set of three — or press “Take a tile”."
+                : "Tap two more matching tiles to make a set of three — or press “Take a tile”."}
+            </p>
           )}
+          <button onClick={() => setSelected([])}
+            className="rounded-2xl bg-emerald-800 hover:bg-emerald-700 text-white text-lg font-bold px-5 py-4 focus:outline-none focus:ring-4 focus:ring-amber-300">
+            Clear
+          </button>
         </div>
       )}
 
       {inCharleston ? (
         <div className="w-full max-w-5xl mx-auto flex gap-3 mb-4">
           <button onClick={passCharleston} disabled={selected.length !== 3}
-            className="flex-1 rounded-2xl bg-amber-500 text-emerald-950 text-2xl font-black py-5 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">Pass these 3 →</button>
+            className="flex-1 rounded-2xl bg-amber-500 text-emerald-950 text-2xl font-black py-5 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
+            {selected.length === 3 ? "Pass these 3 →" : `Pick 3 to pass (${selected.length}/3)`}</button>
           <button onClick={() => { setSelected([]); setPhase("draw"); say("We'll skip the rest of the Charleston. Take a tile when you're ready."); }}
             className="rounded-2xl bg-emerald-700 text-white px-6 text-lg font-bold focus:outline-none focus:ring-4 focus:ring-amber-300">Skip</button>
         </div>
