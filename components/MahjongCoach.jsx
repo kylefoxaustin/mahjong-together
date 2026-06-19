@@ -373,7 +373,7 @@ export default function MahjongCoach() {
       `Tiles she ALREADY has three of (ready-made sets): ${f.readySets.length ? f.readySets.join(", ") : "none"}.`,
       `Pairs in her hand (two matching — one tile away from a set): ${f.pairs.length ? f.pairs.join(", ") : "none"}.`,
       `Jokers in her hand: ${f.jokers} (a Joker can be the third tile of any set).`,
-      mode === "learn" ? `Progress: ${prog.sets} of 4 sets, and ${prog.hasPair ? "her pair is set" : "no pair yet"}.` : "",
+      mode === "learn" ? `Sets she has LOCKED IN so far: ${prog.sets} of 4. ${prog.hasPair ? "She is also holding a pair." : "She does not have a pair yet."} (To lock a set she taps three matching tiles and presses "Make this set".)` : "",
       `Her full hand, for context only: ${tilesStr}.`,
     ].filter(Boolean).join("\n");
     const rules = `These facts are exact and come from the game. Do NOT count her tiles or invent any numbers — rely only on the facts above. If you suggest making a set, name exactly which tiles to tap using only the pairs and Jokers listed (for example, "your two West Winds and one Joker"). Suggest ONLY actions that are possible right now. What she can do right now: ${actionsForPhase(curPhase)}`;
@@ -815,6 +815,9 @@ export default function MahjongCoach() {
             <span className="text-emerald-300 text-3xl font-black px-1" aria-hidden="true">+</span>
             <Slot state={progress.pairSlot} label="The pair" pair />
           </div>
+          <p className="text-center text-emerald-300 text-xs sm:text-sm mt-3">
+            Gold ✓ means you've got it — a set you've locked in, or a matching pair. A dot (…) means you're still building it. Tap three matching tiles, then “Make this set,” to lock a set in.
+          </p>
         </div>
       )}
 
