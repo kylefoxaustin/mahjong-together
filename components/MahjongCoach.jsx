@@ -562,7 +562,7 @@ export default function MahjongCoach() {
                   <div className="text-xs font-semibold text-emerald-200">let this go</div>
                 </div>
               ) : (
-                <div className="text-sm font-semibold text-emerald-400/70 flex items-center" style={{ height: 70 }}>waiting…</div>
+                <div className="text-sm font-semibold text-emerald-400/70 flex items-center" style={{ height: 82 }}>waiting…</div>
               )}
             </div>
           );
