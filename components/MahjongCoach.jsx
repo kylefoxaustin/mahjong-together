@@ -348,40 +348,46 @@ export default function MahjongCoach() {
   // Plain-English summary of exactly what she can do right now, so the coach
   // only ever suggests real on-screen actions (CLAUDE.md §12 — no impossible
   // advice). Kept terse; it's context for the model, not read aloud.
-  const actionsForPhase = useCallback(() => {
-    if (phase === "draw") return `She can take a tile from the wall. She can also tap three matching tiles (Jokers count as wild) and press "Make this set" to lock a set in.`;
-    if (phase === "discard") return `She just drew. She should tap one tile and press "Let this tile go". She can first tap three matching tiles and press "Make this set" to lock a set in.`;
-    if (phase === "call") return `A tile on the table (${callable?.label}) would finish a set. She can press "Take it" or "Leave it".`;
+  const actionsForPhase = useCallback((p = phase) => {
+    if (p === "draw") return `It is her turn to draw. She can press "Take a tile" to draw from the wall, or tap three matching tiles (Jokers count as wild) and press "Make this set".`;
+    if (p === "discard") return `She has ALREADY drawn her tile, so she canNOT take another right now — the "Take a tile" button is disabled. Her only move is to let one tile go: tap a tile and press "Let this tile go". (She may first tap three matching tiles and press "Make this set".) Do NOT tell her to take or draw a tile.`;
+    if (p === "call") return `A tile on the table (${callable?.label}) would finish a set. She can press "Take it" or "Leave it". Do NOT tell her to draw.`;
     return `It's a quiet moment; she's getting set up.`;
   }, [phase, callable]);
 
-  const runCoach = useCallback(async (question) => {
+  // `overrides` lets a caller pass the just-updated hand/phase, since React
+  // state set immediately before this call hasn't been applied yet (that's how
+  // the coach used to give "take a tile" advice right after she'd drawn).
+  const runCoach = useCallback(async (question, overrides) => {
+    const curHand = overrides?.hand ?? hand;
+    const curPhase = overrides?.phase ?? phase;
     setThinking(true);
     setHighlightIds([]); // clear any old highlight while she waits
     const sys = buildSystemPrompt(mode, target);
-    const f = coachFacts(hand);
-    const tilesStr = sortHand(hand).map((t) => t.label).join(", ");
+    const f = coachFacts(curHand);
+    const prog = analyzeHand(curHand, exposed.length);
+    const tilesStr = sortHand(curHand).map((t) => t.label).join(", ");
     // Exact facts from the engine. The coach phrases these; it must not recount.
     const facts = [
       `Sets already locked in and safe: ${exposed.length}.`,
       `Tiles she ALREADY has three of (ready-made sets): ${f.readySets.length ? f.readySets.join(", ") : "none"}.`,
       `Pairs in her hand (two matching — one tile away from a set): ${f.pairs.length ? f.pairs.join(", ") : "none"}.`,
       `Jokers in her hand: ${f.jokers} (a Joker can be the third tile of any set).`,
-      mode === "learn" ? `Progress: ${progress.sets} of 4 sets, and ${progress.hasPair ? "her pair is set" : "no pair yet"}.` : "",
+      mode === "learn" ? `Progress: ${prog.sets} of 4 sets, and ${prog.hasPair ? "her pair is set" : "no pair yet"}.` : "",
       `Her full hand, for context only: ${tilesStr}.`,
     ].filter(Boolean).join("\n");
-    const rules = `These facts are exact and come from the game. Do NOT count her tiles or invent any numbers — rely only on the facts above. If you suggest making a set, name exactly which tiles to tap using only the pairs and Jokers listed (for example, "your two West Winds and one Joker"). What she can do right now: ${actionsForPhase()}`;
+    const rules = `These facts are exact and come from the game. Do NOT count her tiles or invent any numbers — rely only on the facts above. If you suggest making a set, name exactly which tiles to tap using only the pairs and Jokers listed (for example, "your two West Winds and one Joker"). Suggest ONLY actions that are possible right now. What she can do right now: ${actionsForPhase(curPhase)}`;
     const userText = question
       ? `${facts}\n\n${rules}\n\nShe asked out loud: "${question}"\n\nAnswer her kindly and simply, suggesting only things she can do right now.`
       : `${facts}\n\n${rules}\n\nGive her ONE gentle suggestion for her next move.`;
     const reply = await callCoach(sys, userText);
-    const finalText = reply || localHint(allTiles);
+    const finalText = reply || localHint([...curHand, ...exposed.flat()]);
     say(finalText);
     // Light up any of her tiles the coach named (deterministic label match).
     const low = finalText.toLowerCase();
-    setHighlightIds(hand.filter((t) => low.includes(t.label.toLowerCase())).map((t) => t.id));
+    setHighlightIds(curHand.filter((t) => low.includes(t.label.toLowerCase())).map((t) => t.id));
     setThinking(false);
-  }, [allTiles, hand, exposed, mode, target, progress, actionsForPhase, say]);
+  }, [hand, phase, exposed, mode, target, actionsForPhase, say]);
 
   const toggleSelect = (tile) => {
     setHighlightIds([]); // she's choosing now — let her own selection lead
@@ -490,7 +496,9 @@ export default function MahjongCoach() {
     const full = [...newHand, ...exposed.flat()];
     if (mode === "learn" && isWinningHand(full)) { setPhase("won"); say("You did it! Four sets and a pair — that's a winning hand. Beautifully done."); return; }
     setPhase("discard");
-    runCoach();
+    // Pass the fresh hand + phase — state set above isn't applied yet, and the
+    // coach must advise on the discard step (the just-drawn tile included).
+    runCoach(undefined, { hand: newHand, phase: "discard" });
   };
 
   const discardTile = (tile) => {
