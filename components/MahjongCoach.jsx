@@ -45,27 +45,35 @@ const DIFF_KEY = "mahjong-together:difficulty"; // remembers her last choice acr
 /* --- Web Speech TTS: robust voice selection (folds in CampMatch's
    speech.ts). getVoices() is often empty until 'voiceschanged' fires,
    which matters for her very first spoken line. --- */
+
+// Modern neural/enhanced voices sound far more natural than the old compact
+// ones, and they're free where the device has them (Edge "Natural", Apple
+// "Enhanced/Premium", Google/Siri). We prefer these by name first.
+const NATURAL_HINT = /natural|neural|enhanced|premium|online|siri/i;
 const PREFERRED_VOICE_NAMES = [
-  "Samantha", "Victoria", "Alex", "Karen", "Daniel",
+  "Samantha", "Ava", "Allison", "Victoria", "Karen", "Alex", "Daniel",
   "Google US English", "Google UK English Female", "Google UK English Male",
-  "Microsoft Zira - English (United States)",
   "Microsoft Aria Online (Natural) - English (United States)",
-  "Microsoft David - English (United States)",
+  "Microsoft Jenny Online (Natural) - English (United States)",
+  "Microsoft Zira - English (United States)",
 ];
 
 function selectBestVoice() {
   if (typeof window === "undefined" || !window.speechSynthesis) return null;
   const voices = window.speechSynthesis.getVoices();
   if (!voices.length) return null;
+  const english = voices.filter((v) => v.lang && v.lang.toLowerCase().startsWith("en"));
+  const pool = english.length ? english : voices;
+  // 1) Any high-quality neural/enhanced English voice the device has installed.
+  const natural = pool.find((v) => NATURAL_HINT.test(v.name));
+  if (natural) return natural;
+  // 2) A known good-sounding voice by exact name.
   for (const name of PREFERRED_VOICE_NAMES) {
-    const match = voices.find((v) => v.name === name);
+    const match = pool.find((v) => v.name === name);
     if (match) return match;
   }
-  return (
-    voices.find((v) => v.lang === "en-US") ||
-    voices.find((v) => v.lang && v.lang.startsWith("en")) ||
-    voices[0]
-  );
+  // 3) Fall back to en-US, then anything.
+  return pool.find((v) => v.lang === "en-US") || pool[0];
 }
 
 function useSpeech(enabled) {
