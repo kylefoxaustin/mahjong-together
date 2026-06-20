@@ -255,6 +255,8 @@ export default function MahjongCoach() {
   const dragRef = useRef(null); // in-flight drag: { id, startX, moved }
   const justDraggedRef = useRef(false); // suppress the click that fires after a drag
   const [dragId, setDragId] = useState(null); // tile currently being dragged (for styling)
+  const [savedGame, setSavedGame] = useState(null); // a resumable auto-saved game, surfaced as "Continue" on the menu
+  const [isStandalone, setIsStandalone] = useState(false); // true when already installed as an app (hides the install tip)
   const hydratedRef = useRef(false); // becomes true once a saved game has been restored (or none found)
   const botTimersRef = useRef([]); // pending setTimeout ids for the staged opponent turns
   const clearBotTimers = () => { botTimersRef.current.forEach(clearTimeout); botTimersRef.current = []; };
@@ -323,11 +325,18 @@ export default function MahjongCoach() {
     });
   }, []);
 
-  // Restore an auto-saved game on first load (client only, so no SSR mismatch).
-  // We set the coach text without speaking, so reopening is silent. Hydrating
-  // several fields from storage on mount is intentional here.
+  // On first load, read remembered menu prefs and detect any resumable game
+  // (client only, so no SSR mismatch). We DON'T jump onto the board — instead we
+  // open on the menu and offer a big "Continue your game" button, so she's never
+  // dropped mid-game without context. Also note if we're already an installed app.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    try {
+      const standalone =
+        window.matchMedia?.("(display-mode: standalone)")?.matches ||
+        window.navigator.standalone === true;
+      if (standalone) setIsStandalone(true);
+    } catch { /* ignore */ }
     try {
       const pref = localStorage.getItem(DIFF_KEY);
       if (pref && DIFFICULTY[pref]) setDifficulty(pref); // remembered menu choice
@@ -337,27 +346,11 @@ export default function MahjongCoach() {
       if (hp === "0") setHintsOn(false);
       const raw = localStorage.getItem(SAVE_KEY);
       const s = raw && JSON.parse(raw);
-      if (s && s.screen === "game" && Array.isArray(s.hand)) {
-        setMode(s.mode || "learn");
-        if (s.difficulty && DIFFICULTY[s.difficulty]) setDifficulty(s.difficulty);
-        if (s.line && LINES[s.line]) setLine(s.line);
-        setTarget(s.target || "");
-        setWall(s.wall || []);
-        setHand(s.hand || []);
-        setExposed(s.exposed || []);
-        setLockedPair(s.lockedPair || null);
-        setDiscards(s.discards || []);
-        setBotDiscards(s.botDiscards || [null, null, null]);
-        setBotHands(s.botHands || [[], [], []]);
-        // A Seven-pairs game never has a real call; drop any stale callable.
-        const pairsRestore = LINES[s.line]?.structure === "pairs";
-        setCallable(pairsRestore ? null : (s.callable || null));
-        // "bots" is transient (timer-driven), and "call" doesn't belong to a
-        // pairs line — in either case just hand the turn back to her.
-        setPhase(s.phase === "bots" || (pairsRestore && s.phase === "call") ? "draw" : (s.phase || "draw"));
-        setCoach(s.coach || "");
-        if (typeof s.voiceOn === "boolean") setVoiceOn(s.voiceOn);
-        setScreen("game");
+      const terminal = s && ["won", "botwon", "wallgame"].includes(s.phase);
+      if (s && s.screen === "game" && Array.isArray(s.hand) && s.hand.length && !terminal) {
+        setSavedGame(s); // surface "Continue your game" on the menu
+      } else if (terminal) {
+        localStorage.removeItem(SAVE_KEY); // a finished game isn't resumable
       }
     } catch { /* corrupt or unavailable storage — start fresh */ }
   }, []);
@@ -368,12 +361,13 @@ export default function MahjongCoach() {
   useEffect(() => {
     if (!hydratedRef.current) { hydratedRef.current = true; return; }
     try {
+      // Only write while in a game. We deliberately DON'T clear the save on the
+      // menu — that's what keeps "Continue your game" available. The save is
+      // cleared explicitly by "Start over", and overwritten when a new game starts.
       if (screen === "game") {
         localStorage.setItem(SAVE_KEY, JSON.stringify({
           screen, mode, difficulty, line, target, wall, hand, exposed, lockedPair, discards, botDiscards, botHands, callable, phase, coach, voiceOn,
         }));
-      } else {
-        localStorage.removeItem(SAVE_KEY); // back at the menu — nothing to resume
       }
     } catch { /* storage full or unavailable — ignore, game still works */ }
   }, [screen, mode, difficulty, line, target, wall, hand, exposed, lockedPair, discards, botDiscards, botHands, callable, phase, coach, voiceOn]);
@@ -388,6 +382,7 @@ export default function MahjongCoach() {
     setWall(w); setHand(h); setBotHands(bots); setExposed([]); setLockedPair(null); setSelected([]); setCallable(null);
     setDiscards([]); setHighlightIds([]);
     setBotDiscards([null, null, null]);
+    setSavedGame(null); // a fresh game supersedes any earlier auto-save
     setScreen("game");
     if (mode === "learn" && withCharleston) {
       setPhase("charleston-right");
@@ -399,6 +394,37 @@ export default function MahjongCoach() {
         : "Here are your 13 tiles. Take a tile from the wall and we'll figure out the rest together.");
     }
   }, [mode, target, say, stop]);
+
+  // Resume the auto-saved game (the "Continue your game" button on the menu).
+  // Mirrors the save shape written above; silent (we set coach text, not speech).
+  const continueGame = useCallback(() => {
+    const s = savedGame;
+    if (!s) return;
+    stop();
+    clearBotTimers();
+    setMode(s.mode || "learn");
+    if (s.difficulty && DIFFICULTY[s.difficulty]) setDifficulty(s.difficulty);
+    if (s.line && LINES[s.line]) setLine(s.line);
+    setTarget(s.target || "");
+    setWall(s.wall || []);
+    setHand(s.hand || []);
+    setExposed(s.exposed || []);
+    setLockedPair(s.lockedPair || null);
+    setDiscards(s.discards || []);
+    setBotDiscards(s.botDiscards || [null, null, null]);
+    setBotHands(s.botHands || [[], [], []]);
+    // A Seven-pairs game never has a real call; drop any stale callable.
+    const pairsRestore = LINES[s.line]?.structure === "pairs";
+    setCallable(pairsRestore ? null : (s.callable || null));
+    // "bots" is transient (timer-driven), and "call" doesn't belong to a pairs
+    // line — in either case just hand the turn back to her.
+    setPhase(s.phase === "bots" || (pairsRestore && s.phase === "call") ? "draw" : (s.phase || "draw"));
+    setCoach(s.coach || "");
+    if (typeof s.voiceOn === "boolean") setVoiceOn(s.voiceOn);
+    setSelected([]); setHighlightIds([]);
+    setSavedGame(null);
+    setScreen("game");
+  }, [savedGame, stop]);
 
   // Pick (and remember) a difficulty from the menu.
   const chooseDifficulty = useCallback((key) => {
@@ -427,6 +453,7 @@ export default function MahjongCoach() {
     cancelListening();
     clearBotTimers();
     try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
+    setSavedGame(null);
     setHand([]); setWall([]); setExposed([]); setLockedPair(null); setDiscards([]); setBotHands([[], [], []]);
     setBotDiscards([null, null, null]); setCallable(null); setSelected([]); setHighlightIds([]);
     setPhase("draw"); setCoach(""); setTarget(""); setMode("learn");
@@ -954,6 +981,14 @@ export default function MahjongCoach() {
           <h1 className="text-3xl sm:text-4xl font-black text-amber-200 mb-2">Mahjong, together</h1>
           <p className="text-emerald-200 text-lg mb-6">Pick how you'd like to play today.</p>
 
+          {savedGame && (
+            <button onClick={continueGame}
+              className="w-full mb-8 rounded-3xl bg-amber-400 text-emerald-950 p-5 shadow-2xl transition hover:-translate-y-1 motion-reduce:transition-none motion-reduce:hover:translate-y-0 focus:outline-none focus:ring-4 focus:ring-amber-200">
+              <div className="text-2xl font-black">Continue your game</div>
+              <p className="text-base font-semibold text-emerald-900 mt-1">Pick up right where you left off.</p>
+            </button>
+          )}
+
           <div className="mb-8 text-left">
             <div className="text-emerald-200 text-sm font-bold uppercase tracking-widest mb-2 text-center">How challenging?</div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -1005,6 +1040,18 @@ export default function MahjongCoach() {
           <button onClick={() => { setMode("learn"); startGame(false); }} className="mt-6 text-emerald-200 underline text-base focus:outline-none focus:ring-4 focus:ring-amber-400 rounded">
             Skip the Charleston and just deal
           </button>
+
+          {!isStandalone && (
+            <div className="mt-10 rounded-2xl border-2 border-emerald-700 bg-emerald-800/40 p-4 text-emerald-100 text-base">
+              <div className="font-black text-amber-200 mb-1">Make this its own app</div>
+              <p className="leading-relaxed">
+                On a <span className="font-bold">Mac</span>: in Chrome, open the <span className="font-bold">⋮</span> menu and choose <span className="font-bold">Install</span> — or in Safari, <span className="font-bold">File ▸ Add to Dock</span>.
+                <br />
+                On an <span className="font-bold">iPad</span>: tap <span className="font-bold">Share</span>, then <span className="font-bold">Add to Home Screen</span>.
+              </p>
+              <p className="text-emerald-300 text-sm mt-2">Then it opens from your own icon, full-screen — just like a real game.</p>
+            </div>
+          )}
         </div>
       </Shell>
     );
