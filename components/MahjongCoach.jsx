@@ -283,10 +283,12 @@ export default function MahjongCoach() {
   const selectedTiles = useMemo(() => hand.filter((t) => selected.includes(t.id)), [hand, selected]);
   const canMakeSet = !pairsLine && selected.length === 3 && isValidSet(selectedTiles);
   const canMakeKong = !pairsLine && selected.length === 4 && isValidKong(selectedTiles);
-  // Two matching REAL tiles she can commit as her pair (jokers never in the pair).
-  const canMakePair = !pairsLine && selected.length === 2 && !lockedPair &&
+  // Two matching REAL tiles she can commit as a pair (jokers never in a pair).
+  // Sets-lines have a single pair (lockedPair); Seven pairs collects many.
+  const canMakePair = selected.length === 2 &&
     selectedTiles.length === 2 && !selectedTiles[0].isJoker && !selectedTiles[1].isJoker &&
-    selectedTiles[0].key === selectedTiles[1].key;
+    selectedTiles[0].key === selectedTiles[1].key &&
+    (pairsLine || !lockedPair);
   // She can declare a win only when her tiles actually win the chosen line, and
   // it's her turn — she decides WHEN, the game never finishes it for her.
   const canDeclareWin = mode === "learn" && phase === "discard" && winsLine(line, allTiles);
@@ -451,15 +453,23 @@ export default function MahjongCoach() {
     const f = coachFacts(curHand);
     const tilesStr = sortHand(curHand).map((t) => t.label).join(", ");
     // Exact facts from the engine. The coach phrases these; it must not recount.
-    const facts = [
+    // Pair-centric facts for Seven pairs; set-centric for the other lines.
+    const facts = (pairsLine ? [
+      `Her goal this game: ${lineDef.coachGoal}`,
+      `Pairs she already has (two matching): ${f.pairs.length ? f.pairs.join(", ") : "none"}.`,
+      `Tiles she has three or more of (a pair needs only two — a spare can go): ${f.readySets.length ? f.readySets.join(", ") : "none"}.`,
+      `Tiles she has only ONE of (need a match to make a pair): ${f.singles.length ? f.singles.join(", ") : "none"}.`,
+      `Jokers in her hand: ${f.jokers} (Jokers CANNOT be in a pair, so they're best let go).`,
+      `Her full hand, for context only: ${tilesStr}.`,
+    ] : [
       mode === "learn" ? `Her goal this game: ${lineDef.coachGoal}` : "",
       `Groups she has locked in and safe so far: ${exposed.length}${lockedPair ? " (plus her pair)" : ""}.`,
       `Tiles she ALREADY has three of (ready-made sets): ${f.readySets.length ? f.readySets.join(", ") : "none"}.`,
       `Pairs in her hand (two matching): ${f.pairs.length ? f.pairs.join(", ") : "none"}.`,
       `Jokers in her hand: ${f.jokers} (a Joker is wild inside a set, never in a pair).`,
       `Her full hand, for context only: ${tilesStr}.`,
-    ].filter(Boolean).join("\n");
-    const rules = `These facts are exact and come from the game. Do NOT count her tiles or invent any numbers — rely only on the facts above. If you suggest making a set, name exactly which tiles to tap using only the pairs and Jokers listed (for example, "your two West Winds and one Joker"). Suggest ONLY actions that are possible right now. What she can do right now: ${actionsForPhase(curPhase)}`;
+    ]).filter(Boolean).join("\n");
+    const rules = `These facts are exact and come from the game. Do NOT count her tiles or invent any numbers, and only ever name tiles that appear in the facts above — never a tile she doesn't have. Suggest ONLY actions that are possible right now. What she can do right now: ${actionsForPhase(curPhase)}`;
     const userText = question
       ? `${facts}\n\n${rules}\n\nShe asked out loud: "${question}"\n\nAnswer her kindly and simply, suggesting only things she can do right now.`
       : `${facts}\n\n${rules}\n\nGive her ONE gentle suggestion for her next move.`;
@@ -470,7 +480,7 @@ export default function MahjongCoach() {
     const low = finalText.toLowerCase();
     setHighlightIds(curHand.filter((t) => low.includes(t.label.toLowerCase())).map((t) => t.id));
     setThinking(false);
-  }, [hand, phase, exposed, lockedPair, mode, target, lineDef, actionsForPhase, say]);
+  }, [hand, phase, exposed, lockedPair, mode, target, lineDef, pairsLine, actionsForPhase, say]);
 
   const toggleSelect = (tile) => {
     setHighlightIds([]); // she's choosing now — let her own selection lead
@@ -785,13 +795,19 @@ export default function MahjongCoach() {
     if (!canMakePair) return;
     const pairTiles = hand.filter((t) => selected.includes(t.id));
     const keep = hand.filter((t) => !selected.includes(t.id));
-    setLockedPair(pairTiles);
     setHand(keep);
     setSelected([]);
     setHighlightIds([]);
-    const full = [...keep, ...exposed.flat(), ...pairTiles];
+    // Seven pairs collects many pairs (each goes to the locked area); the other
+    // lines have a single pair (lockedPair).
+    let newExposed = exposed, newLockedPair = lockedPair;
+    if (pairsLine) { newExposed = [...exposed, pairTiles]; setExposed(newExposed); }
+    else { newLockedPair = pairTiles; setLockedPair(pairTiles); }
+    const full = [...keep, ...newExposed.flat(), ...(newLockedPair || [])];
     if (mode === "learn" && phase === "discard" && winsLine(line, full)) {
-      say("Your pair is set, and I think you have a winning hand now! Press “I think I won!” when you're ready.");
+      say("That's your last pair — I think you've won! Press “I think I won!” when you're ready.");
+    } else if (pairsLine) {
+      say(phase === "discard" ? "Lovely — that pair is locked in and safe. Keep collecting pairs, then let a tile go." : "Lovely — that pair is locked in and safe. Keep collecting pairs!");
     } else {
       say(phase === "discard" ? "Your pair is set aside and safe. Now let one tile go." : "Your pair is set aside and safe. Take a tile when you're ready.");
     }
@@ -1085,7 +1101,7 @@ export default function MahjongCoach() {
           </div>
           <p className="text-center text-emerald-300 text-xs sm:text-sm mt-3">
             {pairsLine
-              ? `Collect seven matching pairs in your hand (Jokers can't go in a pair). A gold outline ○${hintsOn ? " (lit up below)" : ""} marks a pair you're holding; press “I think I won!” when you have all seven.`
+              ? `Tap two matching tiles and “Make this pair” to lock each pair (Jokers can't go in a pair). Collect all seven, then press “I think I won!”. A gold outline ○${hintsOn ? " (lit up below)" : ""} marks a pair you're still holding.`
               : <>Solid gold ✓ = locked in &amp; safe. A gold <span className="text-amber-300 font-bold">outline ○</span> means you're holding those tiles{hintsOn ? " (lit up below)" : ""} but haven't locked them. Tap matching tiles to “Make this set,” “Make this kong,” or “Make this my pair.”</>}
           </p>
         </div>
@@ -1150,8 +1166,8 @@ export default function MahjongCoach() {
             {isPassPhase ? ` — tap 3 to pass (${selected.length}/3)`
               : isCourtesy ? ` — tap up to 3 to trade (${selected.length})`
               : phase === "charleston-2ask" ? ""
-              : phase === "discard" ? (pairsLine ? " — tap to let go · collect pairs · drag to rearrange" : " — tap to let go · 2 = pair, 3 = set, 4 = kong · drag to rearrange")
-              : phase === "draw" ? (pairsLine ? " — drag to rearrange · collect pairs" : " — drag to rearrange · 2 = pair, 3 = set, 4 = kong")
+              : phase === "discard" ? (pairsLine ? " — tap 2 matching = pair · tap 1 to let go · drag to rearrange" : " — tap to let go · 2 = pair, 3 = set, 4 = kong · drag to rearrange")
+              : phase === "draw" ? (pairsLine ? " — tap 2 matching = pair · drag to rearrange" : " — drag to rearrange · 2 = pair, 3 = set, 4 = kong")
               : ""}
           </div>
           {canArrange && hand.length > 0 && (
@@ -1188,14 +1204,19 @@ export default function MahjongCoach() {
       {(phase === "draw" || phase === "discard") && selected.length > 0 && (
         <div className="w-full max-w-6xl mx-auto flex flex-wrap items-center gap-3 mb-3">
           {pairsLine ? (
-            phase === "discard" && selected.length === 1 ? (
+            canMakePair ? (
+              <button onClick={makePair}
+                className="flex-1 min-w-[12rem] rounded-2xl bg-amber-500 text-emerald-950 text-xl font-black py-4 focus:outline-none focus:ring-4 focus:ring-amber-300">
+                Make this pair ✓
+              </button>
+            ) : phase === "discard" && selected.length === 1 ? (
               <button onClick={letItGo}
                 className="flex-1 min-w-[12rem] rounded-2xl bg-emerald-700 hover:bg-emerald-600 text-white text-xl font-bold py-4 focus:outline-none focus:ring-4 focus:ring-amber-300">
                 Let this tile go
               </button>
             ) : (
               <p className="flex-1 min-w-[12rem] text-emerald-100 text-lg font-semibold self-center">
-                In this hand you just collect seven pairs — no sets to make. Keep matching pairs and let the rest go.
+                {selected.length === 2 ? "Those two don't match — pick two of the same tile (no Joker) for a pair." : "Tap two matching tiles to “Make this pair,” or one tile to let it go."}
               </p>
             )
           ) : selected.length === 4 ? (
