@@ -21,6 +21,10 @@ const eslintConfig = defineConfig([
     // Archival reference artifacts (the v0.2 source + CampMatch's files) —
     // not project source, kept only for provenance.
     "reference/**",
+    // Native (Capacitor) projects + generated bundle — not web source.
+    "android/**",
+    "ios/**",
+    "capacitor/**",
   ]),
 ]);
 

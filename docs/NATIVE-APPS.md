@@ -74,7 +74,12 @@ npx cap open ios                # opens Xcode
 In Xcode:
 1. Select the **App** target → **Signing & Capabilities** → check *Automatically
    manage signing* → pick your **Team** (a free Apple ID works for personal testing).
-2. Plug in the **iPad** (or iPhone), select it as the run destination, press **▶ Run**.
+2. **Microphone/speech permission strings** (needed for "Ask out loud"): open
+   `ios/App/App/Info.plist` and add these two keys (Xcode: right-click → Add Row):
+   - `NSMicrophoneUsageDescription` → `Mahjong, Together listens so you can ask the coach questions out loud.`
+   - `NSSpeechRecognitionUsageDescription` → `Used to turn your spoken questions into text for the coach.`
+   Without them, iOS rejects the app the instant the mic is used.
+3. Plug in the **iPad** (or iPhone), select it as the run destination, press **▶ Run**.
    - First time: on the device, **Settings → General → VPN & Device Management** →
      trust your developer certificate.
 3. The app installs and launches on her iPad.
@@ -85,6 +90,66 @@ In Xcode:
 
 To put it on her iPad without plugging into your Mac each week, options are
 TestFlight (needs the paid account) — a later step when we're closer to "real app".
+
+---
+
+---
+
+## "Ask out loud" in the native apps (native speech-to-text)
+
+In a browser we use the Web Speech API. Inside the native app there is no Web
+Speech API, so we use the **`@capacitor-community/speech-recognition`** plugin
+(works on iOS + Android). The app auto-detects which it's running in
+(`window.Capacitor.isNativePlatform()`) and picks the right one — no code branch
+you have to flip.
+
+What's wired:
+- The plugin is an npm dependency; `npx cap sync` copies its native code into the
+  android/ios projects.
+- **Android**: `RECORD_AUDIO` permission + the `RecognitionService` `<queries>`
+  entry are already in `android/app/src/main/AndroidManifest.xml`.
+- **iOS**: add the two `Info.plist` usage strings (see the iOS section above).
+- The mic button speaks/listens exactly like the web flow: continuous, with a
+  generous 12-second silence auto-finish, and it accumulates phrases across the
+  short restarts the native recognizer does at pauses.
+
+Because the app loads the **hosted** site, native voice needs BOTH: (1) this STT
+code deployed to Vercel (so the in-app web bundle knows to call the plugin), and
+(2) a native build that includes the plugin (`npx cap sync` + rebuild). A web-only
+deploy won't add voice to an already-installed app until you ship a new native build.
+
+---
+
+## TestFlight — update her iPad over-the-air (no weekly cable)
+
+The free-Apple-ID path re-installs from Xcode every 7 days (needs the cable).
+**TestFlight** removes that: builds last 90 days, install + updates happen on the
+iPad with no Mac attached, and you push new builds whenever you like. It requires a
+paid **Apple Developer Program** account ($99/yr) — the one real cost of going this
+route. Nothing is public; TestFlight is private testing.
+
+One-time setup (on the Mac, after the iOS project exists):
+1. Join the Apple Developer Program; in **App Store Connect** → **Apps** → **+** →
+   create the app record (pick the bundle id `com.kylefoxaustin.mahjongtogether`).
+2. In Xcode → target → **Signing**: select your paid **Team**.
+3. Bump the build each upload: target → **General** → **Build** (e.g. 1, 2, 3…).
+
+Upload a build:
+1. Xcode → **Product ▸ Archive** (destination must be "Any iOS Device").
+2. In the Organizer window that opens → **Distribute App** → **TestFlight (Internal
+   Only)** → **Upload**. Processing takes a few minutes.
+3. App Store Connect → your app → **TestFlight** → add yourself / her as an
+   **Internal Tester** (just needs an Apple ID email). Internal testers skip Apple's
+   review wait.
+
+On her iPad (once):
+1. Install **TestFlight** from the App Store, sign in with the tester Apple ID.
+2. Accept the invite → tap **Install**. Future builds you upload show an **Update**
+   button — no cable, no Mac.
+
+> Optional automation: a `fastlane` lane (`fastlane/Fastfile` with a `beta` lane
+> running `build_app` + `upload_to_testflight`) makes each release one command on
+> the Mac. Worth adding once the manual path works.
 
 ---
 

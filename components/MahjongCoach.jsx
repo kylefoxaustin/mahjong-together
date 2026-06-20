@@ -266,6 +266,7 @@ export default function MahjongCoach() {
   const finalTranscriptRef = useRef(""); // accumulates her finished phrases across pauses
   const stoppingRef = useRef(false); // true once she's done (or silence) — so we send, not restart
   const silenceTimerRef = useRef(null); // generous "she's gone quiet" auto-finish
+  const currentSegRef = useRef(""); // native STT: the phrase being spoken right now (between restarts)
   const rackRef = useRef(null); // the hand rack, for drag-to-rearrange measurements
   const dragRef = useRef(null); // in-flight drag: { id, startX, moved }
   const justDraggedRef = useRef(false); // suppress the click that fires after a drag
@@ -279,13 +280,16 @@ export default function MahjongCoach() {
   const clearBotTimers = () => { botTimersRef.current.forEach(clearTimeout); botTimersRef.current = []; };
 
   const { speak, stop } = useSpeech();
-  // SpeechRecognition (STT) is Chrome/Android-only and absent on iOS Safari,
-  // and doesn't exist during SSR. useSyncExternalStore reads it client-only:
-  // the server snapshot is false, so there's no hydration mismatch, and the
-  // real value lands on the client without a setState-in-effect.
+  // Speech-to-text comes from one of two places: the Web Speech API (Chrome /
+  // Android browsers; absent on iOS Safari), OR — when we're running inside our
+  // native app — the Capacitor speech-recognition plugin (works on iOS + Android).
+  // Capacitor injects `window.Capacitor` even when loading a remote URL, so we can
+  // detect native without statically importing the plugin (keeps SSR/build clean).
+  // useSyncExternalStore reads client-only: server snapshot false, no hydration
+  // mismatch, real value lands on the client without a setState-in-effect.
   const sttSupported = useSyncExternalStore(
     () => () => {}, // capability is static — nothing to subscribe to
-    () => !!(window.SpeechRecognition || window.webkitSpeechRecognition),
+    () => !!(window.SpeechRecognition || window.webkitSpeechRecognition) || !!window.Capacitor?.isNativePlatform?.(),
     () => false, // server snapshot
   );
 
@@ -467,9 +471,15 @@ export default function MahjongCoach() {
   // Hard-stop the microphone with no callbacks firing (used on leave/unmount).
   const cancelListening = useCallback(() => {
     clearTimeout(silenceTimerRef.current);
+    stoppingRef.current = true;
     const rec = recogRef.current;
     if (rec) { rec.onresult = null; rec.onerror = null; rec.onend = null; try { rec.abort(); } catch { /* ignore */ } }
     recogRef.current = null;
+    if (typeof window !== "undefined" && window.Capacitor?.isNativePlatform?.()) {
+      import("@capacitor-community/speech-recognition")
+        .then(({ SpeechRecognition }) => { SpeechRecognition.stop().catch(() => {}); SpeechRecognition.removeAllListeners(); })
+        .catch(() => {});
+    }
     setListening(false); setInterim("");
   }, []);
 
@@ -966,8 +976,49 @@ export default function MahjongCoach() {
     silenceTimerRef.current = setTimeout(() => finishListening(), SILENCE_MS);
   };
 
+  // Native (in-app) speech recognition via the Capacitor plugin. Mirrors the web
+  // flow: listen continuously, show interim words, accumulate phrases across the
+  // brief restarts the native recognizer does at pauses, and send when she's done.
+  const startNative = async () => {
+    stop(); // don't let the coach talk over her
+    try {
+      const { SpeechRecognition } = await import("@capacitor-community/speech-recognition");
+      const perm = await SpeechRecognition.requestPermissions().catch(() => null);
+      if (perm && perm.speechRecognition && perm.speechRecognition !== "granted") {
+        say("I need permission to use the microphone. You can type your question instead.");
+        return;
+      }
+      finalTranscriptRef.current = "";
+      currentSegRef.current = "";
+      stoppingRef.current = false;
+      setInterim("");
+      setListening(true);
+      await SpeechRecognition.removeAllListeners();
+      await SpeechRecognition.addListener("partialResults", (data) => {
+        const m = (data && data.matches && data.matches[0]) || "";
+        currentSegRef.current = m;
+        setInterim((finalTranscriptRef.current + m).trim());
+        armSilenceTimer();
+      });
+      await SpeechRecognition.addListener("listeningState", (st) => {
+        // The recognizer stops itself at a pause — if she isn't done, bank what she
+        // said and start again so a pause never cuts her off.
+        if (st && st.status === "stopped" && !stoppingRef.current) {
+          if (currentSegRef.current) { finalTranscriptRef.current += currentSegRef.current + " "; currentSegRef.current = ""; }
+          SpeechRecognition.start({ language: "en-US", partialResults: true, popup: false }).catch(() => {});
+        }
+      });
+      await SpeechRecognition.start({ language: "en-US", partialResults: true, popup: false });
+      armSilenceTimer();
+    } catch {
+      setListening(false);
+      say("I can't reach the microphone. You can type your question instead.");
+    }
+  };
+
   const startListening = () => {
     if (!sttSupported || listening) return;
+    if (window.Capacitor?.isNativePlatform?.()) { startNative(); return; }
     stop(); // don't let the coach talk over her
     const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new Rec();
@@ -1022,6 +1073,22 @@ export default function MahjongCoach() {
   function finishListening() {
     stoppingRef.current = true;
     clearTimeout(silenceTimerRef.current);
+    if (window.Capacitor?.isNativePlatform?.()) {
+      (async () => {
+        try {
+          const { SpeechRecognition } = await import("@capacitor-community/speech-recognition");
+          await SpeechRecognition.stop().catch(() => {});
+          await SpeechRecognition.removeAllListeners();
+        } catch { /* ignore */ }
+        setListening(false);
+        const text = (finalTranscriptRef.current + " " + (currentSegRef.current || "")).trim();
+        finalTranscriptRef.current = ""; currentSegRef.current = "";
+        setInterim("");
+        if (text) runCoach(text);
+        else say("I didn't quite catch that — tap the mic and try again, or type your question.");
+      })();
+      return;
+    }
     try { recogRef.current && recogRef.current.stop(); } catch { setListening(false); }
   }
 
