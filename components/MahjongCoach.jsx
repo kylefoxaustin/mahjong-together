@@ -468,8 +468,11 @@ export default function MahjongCoach() {
       `Pairs in her hand (two matching): ${f.pairs.length ? f.pairs.join(", ") : "none"}.`,
       `Jokers in her hand: ${f.jokers} (a Joker is wild inside a set, never in a pair).`,
       `Her full hand, for context only: ${tilesStr}.`,
+      curPhase === "call" && callable
+        ? `A tile on the table she can TAKE right now: ${callable.label} (she presses "Take it").`
+        : `No discarded tile can be taken right now — taking only happens the moment it's offered.`,
     ]).filter(Boolean).join("\n");
-    const rules = `These facts are exact and come from the game. Do NOT count her tiles or invent any numbers, and only ever name tiles that appear in the facts above — never a tile she doesn't have. Suggest ONLY actions that are possible right now. What she can do right now: ${actionsForPhase(curPhase)}`;
+    const rules = `These facts are exact and come from the game. Do NOT count her tiles or invent any numbers, and only ever name tiles that appear in the facts above — never a tile she doesn't have. Never tell her to take/grab a discarded tile unless the facts say one can be taken right now. Suggest ONLY actions that are possible right now. What she can do right now: ${actionsForPhase(curPhase)}`;
     const userText = question
       ? `${facts}\n\n${rules}\n\nShe asked out loud: "${question}"\n\nAnswer her kindly and simply, suggesting only things she can do right now.`
       : `${facts}\n\n${rules}\n\nGive her ONE gentle suggestion for her next move.`;
@@ -480,7 +483,7 @@ export default function MahjongCoach() {
     const low = finalText.toLowerCase();
     setHighlightIds(curHand.filter((t) => low.includes(t.label.toLowerCase())).map((t) => t.id));
     setThinking(false);
-  }, [hand, phase, exposed, lockedPair, mode, target, lineDef, pairsLine, actionsForPhase, say]);
+  }, [hand, phase, exposed, lockedPair, callable, mode, target, lineDef, pairsLine, actionsForPhase, say]);
 
   const toggleSelect = (tile) => {
     setHighlightIds([]); // she's choosing now — let her own selection lead
@@ -1116,8 +1119,14 @@ export default function MahjongCoach() {
               {t ? (
                 // Re-keyed by tile id so the toss animation replays each round.
                 <div key={t.id} className="animate-toss flex flex-col items-center gap-1">
-                  <Tile tile={t} small dim />
-                  <div className="text-xs font-semibold text-emerald-200">let this go</div>
+                  {phase === "call" && callable && t.id === callable.id ? (
+                    <Tile tile={t} small highlight onClick={takeCall} />
+                  ) : (
+                    <Tile tile={t} small dim />
+                  )}
+                  <div className="text-xs font-semibold text-emerald-200">
+                    {phase === "call" && callable && t.id === callable.id ? "tap to take!" : "let this go"}
+                  </div>
                 </div>
               ) : (
                 <div className="text-sm font-semibold text-emerald-400/70 flex items-center" style={{ height: 92 }}>waiting…</div>
