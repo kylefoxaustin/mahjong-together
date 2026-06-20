@@ -12,6 +12,25 @@ const SAVE_KEY = "mahjong-together:v1";
 // The three opponent seats, in turn order.
 const SEAT_NAMES = ["Left player", "Across", "Right player"];
 
+// Charleston flow: first (right→across→left), then an optional second
+// (left→across→right), then an optional courtesy pass — each step skippable.
+const CHARLESTON_NEXT = {
+  "charleston-right": "charleston-across",
+  "charleston-across": "charleston-left",
+  "charleston-left": "charleston-2ask",
+  "charleston2-left": "charleston2-across",
+  "charleston2-across": "charleston2-right",
+  "charleston2-right": "charleston-courtesy",
+};
+const PASS_PHASES = ["charleston-right", "charleston-across", "charleston-left", "charleston2-left", "charleston2-across", "charleston2-right"];
+const CHARLESTON_SAY = {
+  "charleston-across": "Good. Now pick three to pass across the table.",
+  "charleston-left": "Almost done with the first pass — three more, this time to your left.",
+  "charleston2-left": "Second Charleston! Pick three tiles to pass to your left.",
+  "charleston2-across": "Now three across the table.",
+  "charleston2-right": "Last pass — three to your right.",
+};
+
 // Difficulty ladder. `herAssist` nudges helpful tiles to her on her draw (the
 // gentle "she can't lose" mode); `botAssist` is how often each opponent draws
 // toward completing its OWN hand (0 = blind/basic, 1 = master). Everyone draws
@@ -451,21 +470,44 @@ export default function MahjongCoach() {
 
   const toggleSelect = (tile) => {
     setHighlightIds([]); // she's choosing now — let her own selection lead
-    setSelected((s) => s.includes(tile.id) ? s.filter((x) => x !== tile.id) : s.length < 4 ? [...s, tile.id] : s);
+    const maxSel = phase === "draw" || phase === "discard" ? 4 : 3; // 4 only for kongs in play
+    setSelected((s) => s.includes(tile.id) ? s.filter((x) => x !== tile.id) : s.length < maxSel ? [...s, tile.id] : s);
   };
+
+  // Move `n` selected tiles out and draw `n` back (the pass is simulated from
+  // the wall). Used by every Charleston pass (3) and the courtesy pass (0–3).
+  const passTiles = (n) => {
+    const keep = hand.filter((t) => !selected.includes(t.id));
+    const received = wall.slice(0, n);
+    setHand(sortHand([...keep, ...received]));
+    setWall((w) => w.slice(n));
+    setSelected([]);
+  };
+
+  const finishCharleston = useCallback(() => {
+    setSelected([]);
+    setPhase("draw");
+    say(mode === "card"
+      ? `All set! We're building your hand: "${target}". Take a tile when you're ready.`
+      : "All set — the Charleston's done. Take a tile from the wall and we'll figure out the rest together.");
+  }, [mode, target, say]);
 
   const passCharleston = () => {
     if (selected.length !== 3) return;
-    const keep = hand.filter((t) => !selected.includes(t.id));
-    const received = wall.slice(0, 3);
-    setHand(sortHand([...keep, ...received]));
-    setWall((w) => w.slice(3));
-    setSelected([]);
-    const next = phase === "charleston-right" ? "charleston-across" : phase === "charleston-across" ? "charleston-left" : "draw";
+    passTiles(3);
+    const next = CHARLESTON_NEXT[phase];
     setPhase(next);
-    if (next === "charleston-across") say("Good. Now pick three to pass across the table. Tap three and press Pass.");
-    else if (next === "charleston-left") say("Almost done — three more, this time to your left.");
-    else say("That's the Charleston finished. Now the real game begins. Take a tile when you're ready.");
+    if (next === "charleston-2ask") say("That's the first Charleston done! Would you like a second Charleston, or shall we start playing?");
+    else if (next === "charleston-courtesy") say("Almost ready! One last courtesy swap with the player across — pick up to three tiles to trade, or skip.");
+    else say(CHARLESTON_SAY[next] || "Pick three to pass.");
+  };
+
+  const startSecondCharleston = () => { setSelected([]); setPhase("charleston2-left"); say(CHARLESTON_SAY["charleston2-left"]); };
+  const declineSecondCharleston = () => { setSelected([]); setPhase("charleston-courtesy"); say("We'll skip the second Charleston. One last courtesy swap with the player across — pick up to three tiles to trade, or skip."); };
+  const doCourtesy = () => {
+    if (selected.length > 3) return;
+    passTiles(selected.length); // 0–3
+    finishCharleston();
   };
 
   // The wall is finite (real mahjong): when it runs out with no winner, the
@@ -867,9 +909,11 @@ export default function MahjongCoach() {
   const askTyped = () => { if (typed.trim()) { runCoach(typed.trim()); setTyped(""); } };
 
   const inCharleston = phase.startsWith("charleston");
+  const isPassPhase = PASS_PHASES.includes(phase); // a Charleston pass (exactly 3)
+  const isCourtesy = phase === "charleston-courtesy"; // optional courtesy swap (0–3)
   // Tapping a tile selects it (to discard or to make a set) — never an instant,
-  // unrecoverable discard. Selection is live during the Charleston and her turn.
-  const tileSelectable = inCharleston || phase === "draw" || phase === "discard";
+  // unrecoverable discard. Not selectable on the "second Charleston?" prompt.
+  const tileSelectable = isPassPhase || isCourtesy || phase === "draw" || phase === "discard";
 
   if (screen === "menu") {
     return (
@@ -1085,7 +1129,9 @@ export default function MahjongCoach() {
         <div className="flex items-center justify-between gap-3 mb-3">
           <div className="text-sm uppercase tracking-widest text-emerald-300 font-bold">
             Your tiles
-            {inCharleston ? ` — tap 3 to pass (${selected.length}/3)`
+            {isPassPhase ? ` — tap 3 to pass (${selected.length}/3)`
+              : isCourtesy ? ` — tap up to 3 to trade (${selected.length})`
+              : phase === "charleston-2ask" ? ""
               : phase === "discard" ? " — tap to let go · 2 = pair, 3 = set, 4 = kong · drag to rearrange"
               : phase === "draw" ? " — drag to rearrange · 2 = pair, 3 = set, 4 = kong"
               : ""}
@@ -1162,12 +1208,27 @@ export default function MahjongCoach() {
         </div>
       )}
 
-      {inCharleston ? (
+      {isPassPhase ? (
         <div className="w-full max-w-6xl mx-auto flex gap-3 mb-4">
           <button onClick={passCharleston} disabled={selected.length !== 3}
             className="flex-1 rounded-2xl bg-amber-500 text-emerald-950 text-2xl font-black py-5 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
             {selected.length === 3 ? "Pass these 3 →" : `Pick 3 to pass (${selected.length}/3)`}</button>
-          <button onClick={() => { setSelected([]); setPhase("draw"); say("We'll skip the rest of the Charleston. Take a tile when you're ready."); }}
+          <button onClick={finishCharleston}
+            className="rounded-2xl bg-emerald-700 text-white px-6 text-lg font-bold focus:outline-none focus:ring-4 focus:ring-amber-300">Skip to playing</button>
+        </div>
+      ) : phase === "charleston-2ask" ? (
+        <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row gap-3 mb-4">
+          <button onClick={startSecondCharleston}
+            className="flex-1 rounded-2xl bg-amber-500 text-emerald-950 text-2xl font-black py-5 focus:outline-none focus:ring-4 focus:ring-amber-300">Yes, a second Charleston</button>
+          <button onClick={declineSecondCharleston}
+            className="flex-1 rounded-2xl bg-emerald-700 text-white text-2xl font-bold py-5 focus:outline-none focus:ring-4 focus:ring-amber-300">No, let's play</button>
+        </div>
+      ) : isCourtesy ? (
+        <div className="w-full max-w-6xl mx-auto flex gap-3 mb-4">
+          <button onClick={doCourtesy} disabled={selected.length > 3}
+            className="flex-1 rounded-2xl bg-amber-500 text-emerald-950 text-2xl font-black py-5 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
+            {selected.length === 0 ? "Trade nothing →" : `Trade these ${selected.length} →`}</button>
+          <button onClick={finishCharleston}
             className="rounded-2xl bg-emerald-700 text-white px-6 text-lg font-bold focus:outline-none focus:ring-4 focus:ring-amber-300">Skip</button>
         </div>
       ) : phase === "call" ? (

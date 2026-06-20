@@ -77,8 +77,14 @@ Sources: see bottom.
   opponent may contest it: her winning claim is always protected; otherwise an
   opponent may declare Mahjong on it, or grab it for a set before her (Hard/
   Advanced via `claimWin`/`botClaims`). Easy/Normal stay contest-free.
-- ⏭️ Next: **#5 joker exchange**, then **#6 Charleston completeness**; plus the
-  "let her choose the winning line" request.
+- ✅ **#5 Joker exchange** — tap a redeemable Joker in a locked set to swap her
+  matching tile in and take the Joker back (her own exposures).
+- ✅ **#6 Charleston completeness** — optional second Charleston (left→across→
+  right) and an optional courtesy pass (0–3 across), each skippable. (Blind pass
+  intentionally omitted — niche, and awkward in the wall-simulated model.)
+- ⏭️ Remaining: **"let her choose the winning line"** (target-hand picker — the
+  bigger design piece). The NMJL rules sequence is otherwise complete for our
+  gentle scope.
 
 ### NEW request (from Kyle): let HER choose the winning line
 
