@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from "react";
 import { Volume2, VolumeX, Mic, HelpCircle, RotateCcw, ArrowRight, BadgeCheck, Lightbulb, LightbulbOff } from "lucide-react";
-import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, pickAssistedDrawIndex, shuffle, coachFacts, chooseDiscard, decomposeWin, handGroups } from "@/lib/tiles";
+import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, pickAssistedDrawIndex, coachFacts, chooseDiscard, decomposeWin, handGroups } from "@/lib/tiles";
 import { buildSystemPrompt, callCoach } from "@/lib/coach";
 
 // Where the in-progress game is auto-saved on her device (localStorage). Bump
@@ -457,13 +457,13 @@ export default function MahjongCoach() {
     else say("That's the Charleston finished. Now the real game begins. Take a tile when you're ready.");
   };
 
-  // Top up the wall from the spent-tile pile so the game never dead-ends.
-  const topUp = useCallback((w, need) => {
-    if (w.length >= need || discards.length === 0) return w;
-    const merged = shuffle([...w, ...discards]);
-    setDiscards([]);
-    return merged;
-  }, [discards]);
+  // The wall is finite (real mahjong): when it runs out with no winner, the
+  // hand is a gentle draw — a "wall game".
+  const endWallGame = useCallback(() => {
+    clearBotTimers();
+    setPhase("wallgame");
+    say("We've used up all the tiles and nobody finished — this hand is a wash. That happens! Press “Play again” for a fresh deal.");
+  }, [say]);
 
   // The three opponents each take a real turn: draw a tile, and either declare
   // Mahjong (rare — they draw blind) or let go of their least useful tile. We
@@ -473,11 +473,11 @@ export default function MahjongCoach() {
     clearBotTimers();
     const botAssist = DIFFICULTY[difficulty].botAssist; // 0 = basic/blind, 1 = master
     let w = [...wall];
-    let disc = [...discards];
+    const disc = [...discards];
     // A bot draws blind by default; at higher difficulty it sometimes draws the
-    // most useful tile for its OWN hand, so it completes faster and wins more.
+    // most useful tile for its OWN hand. The wall is finite — no recycling.
     const drawFor = (botHand) => {
-      if (w.length === 0) { if (!disc.length) return null; w = shuffle(disc); disc = []; }
+      if (w.length === 0) return null;
       const idx = botAssist > 0 && Math.random() < botAssist ? pickAssistedDrawIndex(w, botHand) : 0;
       return w.splice(idx, 1)[0];
     };
@@ -522,22 +522,23 @@ export default function MahjongCoach() {
         setCallable(claim);
         setPhase("call");
         say(`That ${claim.label} would finish a set for you! Press "Take it" to grab it, or "Leave it" to wait.`);
+      } else if (w.length === 0) {
+        endWallGame(); // the wall ran dry and nobody finished
       } else {
         setPhase("draw");
         say("Your turn again — take a tile when you're ready.");
       }
     }, STEP * (lastReveal + 2)));
-  }, [wall, discards, botHands, difficulty, mode, say]);
+  }, [wall, discards, botHands, difficulty, mode, endWallGame, say]);
 
   const drawTile = () => {
     if (phase !== "draw") return;
-    const w = topUp(wall, 1);
-    if (w.length === 0) { startGame(false); return; } // pile and wall both empty — fresh deal
+    if (wall.length === 0) { endWallGame(); return; } // finite wall — nobody won
     // On Easy (learn mode) we nudge a helpful tile her way so she can't lose;
     // at Normal and up she draws from the wall like everyone else.
-    const idx = mode === "learn" && DIFFICULTY[difficulty].herAssist ? pickAssistedDrawIndex(w, hand) : 0;
-    const t = w[idx];
-    const rest = [...w.slice(0, idx), ...w.slice(idx + 1)];
+    const idx = mode === "learn" && DIFFICULTY[difficulty].herAssist ? pickAssistedDrawIndex(wall, hand) : 0;
+    const t = wall[idx];
+    const rest = [...wall.slice(0, idx), ...wall.slice(idx + 1)];
     // Append the new tile (don't re-sort) so her own arrangement is preserved;
     // the fresh tile arrives at the end of the rack. "Tidy up" re-sorts on demand.
     const newHand = [...hand, t];
@@ -545,7 +546,7 @@ export default function MahjongCoach() {
     setPhase("discard");
     // Never auto-declare — she decides when to finish. If she now holds a
     // winning hand, point her to the "I think I won!" button; otherwise coach.
-    const full = [...newHand, ...exposed.flat()];
+    const full = [...newHand, ...exposed.flat(), ...(lockedPair || [])];
     if (mode === "learn" && isWinningHand(full)) {
       say("Wonderful — I think you have a winning hand! When you're ready, press “I think I won!” to finish. You can keep arranging or locking sets first if you like.");
     } else {
@@ -901,7 +902,7 @@ export default function MahjongCoach() {
         </div>
       )}
 
-      {mode === "learn" && !inCharleston && phase !== "won" && phase !== "botwon" && (
+      {mode === "learn" && !inCharleston && phase !== "won" && phase !== "botwon" && phase !== "wallgame" && (
         <div className="w-full max-w-6xl mx-auto mb-4 rounded-3xl bg-emerald-800/40 p-4">
           <div className="text-sm uppercase tracking-widest text-emerald-300 mb-3 font-bold text-center">Your goal — four sets and a pair</div>
           <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
@@ -1045,10 +1046,10 @@ export default function MahjongCoach() {
         </div>
       ) : (
         <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row gap-3 mb-4">
-          <button onClick={(phase === "won" || phase === "botwon") ? () => startGame(mode === "learn") : drawTile} disabled={phase !== "draw" && phase !== "won" && phase !== "botwon"}
+          <button onClick={(phase === "won" || phase === "botwon" || phase === "wallgame") ? () => startGame(mode === "learn") : drawTile} disabled={phase !== "draw" && phase !== "won" && phase !== "botwon" && phase !== "wallgame"}
             className="flex-1 rounded-2xl bg-amber-500 enabled:hover:bg-amber-400 text-emerald-950 text-2xl font-black py-5 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
             {phase === "won" ? "Play again 🎉"
-              : phase === "botwon" ? "Play again"
+              : phase === "botwon" || phase === "wallgame" ? "Play again"
               : phase === "bots" ? "Other players…"
               : phase === "discard" ? "Let a tile go first"
               : "Take a tile"}
