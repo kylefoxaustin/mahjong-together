@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from "react";
 import { Volume2, VolumeX, Mic, HelpCircle, RotateCcw, ArrowRight, BadgeCheck, Lightbulb, LightbulbOff } from "lucide-react";
-import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, isValidKong, pickAssistedDrawIndex, coachFacts, chooseDiscard, decomposeWin, handGroups } from "@/lib/tiles";
+import { buildWall, sortHand, makeTile, isWinningHand, localHint, isValidSet, isValidKong, pickAssistedDrawIndex, coachFacts, chooseDiscard } from "@/lib/tiles";
 import { buildSystemPrompt, callCoach } from "@/lib/coach";
+import { LINES, LINE_ORDER, winsLine, lineProgress } from "@/lib/lines";
 
 // Where the in-progress game is auto-saved on her device (localStorage). Bump
 // the version suffix if the saved shape ever changes, to avoid restoring stale data.
@@ -47,6 +48,7 @@ const DIFFICULTY = {
 const DIFF_ORDER = ["easy", "normal", "hard", "advanced"];
 const DIFF_KEY = "mahjong-together:difficulty"; // remembers her last choice across visits
 const HINTS_KEY = "mahjong-together:hints"; // remembers the on-screen-hints toggle
+const LINE_KEY = "mahjong-together:line"; // remembers the winning line she chases
 
 /* ------------------------------------------------------------------ *
  *  Mahjong, Together — coach + game UI (ported from the v0.2 artifact)
@@ -190,7 +192,9 @@ function Tile({ tile, onClick, selected, dim, small, draggable, dragging, fill, 
 //  held    = she's holding the tiles but hasn't committed → gold OUTLINE (hollow)
 //  building= a pair working toward a set → dim "…"
 //  empty   = nothing yet
-function Slot({ state, label, pair }) {
+function Slot({ state, kind = "set" }) {
+  const label = kind === "pair" ? "Pair" : kind === "kong" ? "Kong" : "Set";
+  const pair = kind === "pair";
   const styles =
     state === "locked"
       ? "bg-amber-400 border-amber-300 text-emerald-950" // solid
@@ -205,11 +209,11 @@ function Slot({ state, label, pair }) {
   return (
     <div
       role="img"
-      aria-label={`${pair ? "Pair" : label}: ${status}`}
-      className={`flex flex-col items-center justify-center rounded-2xl border-4 h-16 w-20 sm:w-24 ${styles}`}
+      aria-label={`${label}: ${status}`}
+      className={`flex flex-col items-center justify-center rounded-2xl border-4 h-16 w-16 sm:w-20 ${pair ? "" : ""} ${styles}`}
     >
       <span className="text-2xl font-black leading-none" aria-hidden="true">{mark}</span>
-      <span className="mt-0.5 text-[10px] sm:text-xs font-bold uppercase tracking-wide">{pair ? "Pair" : "Set"}</span>
+      <span className="mt-0.5 text-[10px] sm:text-xs font-bold uppercase tracking-wide">{label}</span>
     </div>
   );
 }
@@ -218,6 +222,7 @@ export default function MahjongCoach() {
   const [screen, setScreen] = useState("menu");
   const [mode, setMode] = useState("learn");
   const [difficulty, setDifficulty] = useState("easy");
+  const [line, setLine] = useState("foursets"); // which winning line she's chasing (learn mode)
   const [target, setTarget] = useState("");
 
   const [wall, setWall] = useState([]);
@@ -261,40 +266,26 @@ export default function MahjongCoach() {
     () => false, // server snapshot
   );
 
+  const lineDef = LINES[line] || LINES.foursets;
+  const pairsLine = lineDef.structure === "pairs"; // Seven pairs — no set/kong/pair locking
   const allTiles = useMemo(() => [...hand, ...exposed.flat(), ...(lockedPair || [])], [hand, exposed, lockedPair]);
-  // When she wins, work out ONE clear way the 14 tiles make 4 sets + a pair.
-  const winBreakdown = useMemo(() => (phase === "won" ? decomposeWin(allTiles) : null), [phase, allTiles]);
-  // The actual tiles she's holding toward the goal — drives the panel slots and
-  // (when hints are on) the gold highlight on the matching tiles.
-  const groups = useMemo(() => handGroups(hand), [hand]);
-  const goalSlots = useMemo(() => {
-    const locked = Math.min(4, exposed.length);
-    const slots = [];
-    for (let i = 0; i < 4; i++) {
-      if (i < locked) slots.push("locked");
-      else if (i < locked + groups.sets.length) slots.push("held");
-      else if (i < locked + groups.sets.length + groups.building.length) slots.push("building");
-      else slots.push("empty");
-    }
-    const pairState = lockedPair ? "locked" : groups.pair ? "held" : "empty";
-    return { setSlots: slots, pairState };
-  }, [exposed, groups, lockedPair]);
-  // Tiles the panel is pointing at (her pair + the sets she's holding).
-  const hintIds = useMemo(
-    () => new Set([...(groups.pair || []), ...groups.sets.flat()].map((t) => t.id)),
-    [groups],
-  );
-  // Which three currently-selected concealed tiles (if any) form a valid set.
+  // When she wins, work out ONE clear way her tiles make the chosen line.
+  const winBreakdown = useMemo(() => (phase === "won" ? lineDef.decompose(allTiles) : null), [phase, allTiles, lineDef]);
+  // Progress toward the chosen line — drives the panel slots and (when hints are
+  // on) the gold highlight on the matching tiles.
+  const progress = useMemo(() => lineProgress(line, hand, exposed, lockedPair), [line, hand, exposed, lockedPair]);
+  const hintIds = progress.hintIds;
+  // Which currently-selected concealed tiles (if any) form a valid set/kong.
   const selectedTiles = useMemo(() => hand.filter((t) => selected.includes(t.id)), [hand, selected]);
-  const canMakeSet = selected.length === 3 && isValidSet(selectedTiles);
-  const canMakeKong = selected.length === 4 && isValidKong(selectedTiles);
+  const canMakeSet = !pairsLine && selected.length === 3 && isValidSet(selectedTiles);
+  const canMakeKong = !pairsLine && selected.length === 4 && isValidKong(selectedTiles);
   // Two matching REAL tiles she can commit as her pair (jokers never in the pair).
-  const canMakePair = selected.length === 2 && !lockedPair &&
+  const canMakePair = !pairsLine && selected.length === 2 && !lockedPair &&
     selectedTiles.length === 2 && !selectedTiles[0].isJoker && !selectedTiles[1].isJoker &&
     selectedTiles[0].key === selectedTiles[1].key;
-  // She can declare a win only when she actually holds one (her 14 tiles), and
+  // She can declare a win only when her tiles actually win the chosen line, and
   // it's her turn — she decides WHEN, the game never finishes it for her.
-  const canDeclareWin = mode === "learn" && phase === "discard" && isWinningHand(allTiles);
+  const canDeclareWin = mode === "learn" && phase === "discard" && winsLine(line, allTiles);
   // Joker exchange: on her turn, a Joker in one of her locked sets can be
   // reclaimed if she holds the real tile it stands in for.
   const myTurn = phase === "draw" || phase === "discard";
@@ -330,6 +321,8 @@ export default function MahjongCoach() {
     try {
       const pref = localStorage.getItem(DIFF_KEY);
       if (pref && DIFFICULTY[pref]) setDifficulty(pref); // remembered menu choice
+      const linePref = localStorage.getItem(LINE_KEY);
+      if (linePref && LINES[linePref]) setLine(linePref);
       const hp = localStorage.getItem(HINTS_KEY);
       if (hp === "0") setHintsOn(false);
       const raw = localStorage.getItem(SAVE_KEY);
@@ -337,6 +330,7 @@ export default function MahjongCoach() {
       if (s && s.screen === "game" && Array.isArray(s.hand)) {
         setMode(s.mode || "learn");
         if (s.difficulty && DIFFICULTY[s.difficulty]) setDifficulty(s.difficulty);
+        if (s.line && LINES[s.line]) setLine(s.line);
         setTarget(s.target || "");
         setWall(s.wall || []);
         setHand(s.hand || []);
@@ -364,13 +358,13 @@ export default function MahjongCoach() {
     try {
       if (screen === "game") {
         localStorage.setItem(SAVE_KEY, JSON.stringify({
-          screen, mode, difficulty, target, wall, hand, exposed, lockedPair, discards, botDiscards, botHands, callable, phase, coach, voiceOn,
+          screen, mode, difficulty, line, target, wall, hand, exposed, lockedPair, discards, botDiscards, botHands, callable, phase, coach, voiceOn,
         }));
       } else {
         localStorage.removeItem(SAVE_KEY); // back at the menu — nothing to resume
       }
     } catch { /* storage full or unavailable — ignore, game still works */ }
-  }, [screen, mode, difficulty, target, wall, hand, exposed, lockedPair, discards, botDiscards, botHands, callable, phase, coach, voiceOn]);
+  }, [screen, mode, difficulty, line, target, wall, hand, exposed, lockedPair, discards, botDiscards, botHands, callable, phase, coach, voiceOn]);
 
   const startGame = useCallback((withCharleston) => {
     stop();
@@ -398,6 +392,12 @@ export default function MahjongCoach() {
   const chooseDifficulty = useCallback((key) => {
     setDifficulty(key);
     try { localStorage.setItem(DIFF_KEY, key); } catch { /* ignore */ }
+  }, []);
+
+  // Pick (and remember) which winning line she's chasing.
+  const chooseLine = useCallback((key) => {
+    setLine(key);
+    try { localStorage.setItem(LINE_KEY, key); } catch { /* ignore */ }
   }, []);
 
   // "Start over" — wipe the saved game and return to a clean menu.
@@ -428,11 +428,12 @@ export default function MahjongCoach() {
   // only ever suggests real on-screen actions (CLAUDE.md §12 — no impossible
   // advice). Kept terse; it's context for the model, not read aloud.
   const actionsForPhase = useCallback((p = phase) => {
-    if (p === "draw") return `It is her turn to draw. She can press "Take a tile" to draw from the wall, or tap three matching tiles (Jokers count as wild) and press "Make this set".`;
-    if (p === "discard") return `She has ALREADY drawn her tile, so she canNOT take another right now — the "Take a tile" button is disabled. Her only move is to let one tile go: tap a tile and press "Let this tile go". (She may first tap three matching tiles and press "Make this set".) Do NOT tell her to take or draw a tile.`;
+    const makeHint = pairsLine ? "" : ` She may also tap matching tiles and press "Make this set", "Make this kong", or "Make this my pair".`;
+    if (p === "draw") return `It is her turn to draw. She can press "Take a tile" to draw from the wall.${makeHint}`;
+    if (p === "discard") return `She has ALREADY drawn her tile, so she canNOT take another right now — the "Take a tile" button is disabled. Her only move is to let one tile go: tap a tile and press "Let this tile go".${makeHint} Do NOT tell her to take or draw a tile.`;
     if (p === "call") return `A tile on the table (${callable?.label}) would finish a set. She can press "Take it" or "Leave it". Do NOT tell her to draw.`;
     return `It's a quiet moment; she's getting set up.`;
-  }, [phase, callable]);
+  }, [phase, callable, pairsLine]);
 
   // `overrides` lets a caller pass the just-updated hand/phase, since React
   // state set immediately before this call hasn't been applied yet (that's how
@@ -442,17 +443,16 @@ export default function MahjongCoach() {
     const curPhase = overrides?.phase ?? phase;
     setThinking(true);
     setHighlightIds([]); // clear any old highlight while she waits
-    const sys = buildSystemPrompt(mode, target);
+    const sys = buildSystemPrompt(mode, target, lineDef.coachGoal);
     const f = coachFacts(curHand);
-    const prog = analyzeHand(curHand, exposed.length);
     const tilesStr = sortHand(curHand).map((t) => t.label).join(", ");
     // Exact facts from the engine. The coach phrases these; it must not recount.
     const facts = [
-      `Sets already locked in and safe: ${exposed.length}.`,
+      mode === "learn" ? `Her goal this game: ${lineDef.coachGoal}` : "",
+      `Groups she has locked in and safe so far: ${exposed.length}${lockedPair ? " (plus her pair)" : ""}.`,
       `Tiles she ALREADY has three of (ready-made sets): ${f.readySets.length ? f.readySets.join(", ") : "none"}.`,
-      `Pairs in her hand (two matching — one tile away from a set): ${f.pairs.length ? f.pairs.join(", ") : "none"}.`,
-      `Jokers in her hand: ${f.jokers} (a Joker can be the third tile of any set).`,
-      mode === "learn" ? `Sets she has LOCKED IN so far: ${prog.sets} of 4. ${prog.hasPair ? "She is also holding a pair." : "She does not have a pair yet."} (To lock a set she taps three matching tiles and presses "Make this set".)` : "",
+      `Pairs in her hand (two matching): ${f.pairs.length ? f.pairs.join(", ") : "none"}.`,
+      `Jokers in her hand: ${f.jokers} (a Joker is wild inside a set, never in a pair).`,
       `Her full hand, for context only: ${tilesStr}.`,
     ].filter(Boolean).join("\n");
     const rules = `These facts are exact and come from the game. Do NOT count her tiles or invent any numbers — rely only on the facts above. If you suggest making a set, name exactly which tiles to tap using only the pairs and Jokers listed (for example, "your two West Winds and one Joker"). Suggest ONLY actions that are possible right now. What she can do right now: ${actionsForPhase(curPhase)}`;
@@ -466,7 +466,7 @@ export default function MahjongCoach() {
     const low = finalText.toLowerCase();
     setHighlightIds(curHand.filter((t) => low.includes(t.label.toLowerCase())).map((t) => t.id));
     setThinking(false);
-  }, [hand, phase, exposed, mode, target, actionsForPhase, say]);
+  }, [hand, phase, exposed, lockedPair, mode, target, lineDef, actionsForPhase, say]);
 
   const toggleSelect = (tile) => {
     setHighlightIds([]); // she's choosing now — let her own selection lead
@@ -577,7 +577,7 @@ export default function MahjongCoach() {
         const keyOf = (bh, key) => bh.filter((t) => t.key === key && !t.isJoker).length;
         // Her own winning claim has priority over any opponent exposure (Mahjong
         // beats an exposure), and we always protect the human's win.
-        const herWin = isWinningHand([...herConcealed, claim, ...exposed.flat(), ...(lockedPair || [])]);
+        const herWin = winsLine(line, [...herConcealed, claim, ...exposed.flat(), ...(lockedPair || [])]);
         // (a) Otherwise an opponent may declare Mahjong on it (Hard/Advanced).
         if (!herWin && cfg.claimWin) {
           const wb = bots.findIndex((bh, i) => i !== di && isWinningHand([...bh, claim]));
@@ -612,14 +612,14 @@ export default function MahjongCoach() {
         say("Your turn again — take a tile when you're ready.");
       }
     }, STEP * (lastReveal + 2)));
-  }, [wall, discards, botHands, exposed, lockedPair, difficulty, mode, endWallGame, say]);
+  }, [wall, discards, botHands, exposed, lockedPair, difficulty, mode, line, endWallGame, say]);
 
   const drawTile = () => {
     if (phase !== "draw") return;
     if (wall.length === 0) { endWallGame(); return; } // finite wall — nobody won
     // On Easy (learn mode) we nudge a helpful tile her way so she can't lose;
     // at Normal and up she draws from the wall like everyone else.
-    const idx = mode === "learn" && DIFFICULTY[difficulty].herAssist ? pickAssistedDrawIndex(wall, hand) : 0;
+    const idx = mode === "learn" && DIFFICULTY[difficulty].herAssist ? pickAssistedDrawIndex(wall, hand, lineDef.assist) : 0;
     const t = wall[idx];
     const rest = [...wall.slice(0, idx), ...wall.slice(idx + 1)];
     // Append the new tile (don't re-sort) so her own arrangement is preserved;
@@ -630,7 +630,7 @@ export default function MahjongCoach() {
     // Never auto-declare — she decides when to finish. If she now holds a
     // winning hand, point her to the "I think I won!" button; otherwise coach.
     const full = [...newHand, ...exposed.flat(), ...(lockedPair || [])];
-    if (mode === "learn" && isWinningHand(full)) {
+    if (mode === "learn" && winsLine(line, full)) {
       say("Wonderful — I think you have a winning hand! When you're ready, press “I think I won!” to finish. You can keep arranging or locking sets first if you like.");
     } else {
       // Pass the fresh hand + phase — state set above isn't applied yet, and the
@@ -723,7 +723,7 @@ export default function MahjongCoach() {
     setExposed(newExposed);
     setSelected([]);
     const full = [...keep, ...newExposed.flat(), ...(lockedPair || [])];
-    if (mode === "learn" && phase === "discard" && isWinningHand(full)) {
+    if (mode === "learn" && phase === "discard" && winsLine(line, full)) {
       say("Lovely — that set is locked in, and I think you have a winning hand now! Press “I think I won!” when you're ready.");
     } else {
       say(phase === "discard" ? "Lovely — that set is locked in and safe. Now let one tile go." : "Lovely — that set is locked in and safe. Take a tile when you're ready.");
@@ -740,7 +740,7 @@ export default function MahjongCoach() {
     // Replacement draw (assisted on Easy, like her normal draw).
     let newHand = keep, restWall = wall;
     if (wall.length > 0) {
-      const idx = mode === "learn" && DIFFICULTY[difficulty].herAssist ? pickAssistedDrawIndex(wall, keep) : 0;
+      const idx = mode === "learn" && DIFFICULTY[difficulty].herAssist ? pickAssistedDrawIndex(wall, keep, lineDef.assist) : 0;
       newHand = [...keep, wall[idx]];
       restWall = [...wall.slice(0, idx), ...wall.slice(idx + 1)];
     }
@@ -752,7 +752,7 @@ export default function MahjongCoach() {
     setHighlightIds([]);
     setPhase("discard");
     const full = [...newHand, ...newExposed.flat(), ...(lockedPair || [])];
-    if (mode === "learn" && isWinningHand(full)) {
+    if (mode === "learn" && winsLine(line, full)) {
       say("A kong — four of a kind! And I think that's a winning hand. Press “I think I won!” when you're ready.");
     } else {
       say("A kong — four of a kind, locked in, and you drew a replacement tile. Now let one tile go.");
@@ -786,7 +786,7 @@ export default function MahjongCoach() {
     setSelected([]);
     setHighlightIds([]);
     const full = [...keep, ...exposed.flat(), ...pairTiles];
-    if (mode === "learn" && phase === "discard" && isWinningHand(full)) {
+    if (mode === "learn" && phase === "discard" && winsLine(line, full)) {
       say("Your pair is set, and I think you have a winning hand now! Press “I think I won!” when you're ready.");
     } else {
       say(phase === "discard" ? "Your pair is set aside and safe. Now let one tile go." : "Your pair is set aside and safe. Take a tile when you're ready.");
@@ -811,7 +811,7 @@ export default function MahjongCoach() {
     // Replacement draw for a kong.
     let newHand = keep, restWall = wall;
     if (kong && wall.length > 0) {
-      const idx = mode === "learn" && DIFFICULTY[difficulty].herAssist ? pickAssistedDrawIndex(wall, keep) : 0;
+      const idx = mode === "learn" && DIFFICULTY[difficulty].herAssist ? pickAssistedDrawIndex(wall, keep, lineDef.assist) : 0;
       newHand = [...keep, wall[idx]];
       restWall = [...wall.slice(0, idx), ...wall.slice(idx + 1)];
     }
@@ -823,7 +823,7 @@ export default function MahjongCoach() {
     setSelected([]);
     setPhase("discard");
     const full = [...newHand, ...newExposed.flat(), ...(lockedPair || [])];
-    if (mode === "learn" && isWinningHand(full)) {
+    if (mode === "learn" && winsLine(line, full)) {
       say(kong ? "A kong off the table — four of a kind! I think that's a winning hand. Press “I think I won!”." : "Nice grab — and I think that completes a winning hand! Press “I think I won!” when you're ready.");
     } else {
       say(kong ? "A kong — four of a kind, locked in, and you drew a replacement. Now let one tile go." : "Nice grab — that set is locked in and safe. Now let one tile go.");
@@ -940,6 +940,24 @@ export default function MahjongCoach() {
             </div>
           </div>
 
+          <div className="mb-8 text-left">
+            <div className="text-emerald-200 text-sm font-bold uppercase tracking-widest mb-2 text-center">A hand to aim for (in “Just play &amp; learn”)</div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {LINE_ORDER.map((key) => {
+                const l = LINES[key];
+                const on = line === key;
+                return (
+                  <button key={key} onClick={() => chooseLine(key)} aria-pressed={on}
+                    className={`rounded-2xl p-3 border-4 transition motion-reduce:transition-none focus:outline-none focus:ring-4 focus:ring-amber-300
+                      ${on ? "bg-amber-400 border-amber-300 text-emerald-950" : "bg-emerald-800/60 border-emerald-700 text-emerald-100 hover:bg-emerald-700/60"}`}>
+                    <div className="text-base font-black">{l.name}</div>
+                    <div className={`text-xs font-semibold mt-1 ${on ? "text-emerald-900" : "text-emerald-300"}`}>{l.blurb}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="grid sm:grid-cols-2 gap-4">
             <button onClick={() => { setMode("learn"); startGame(true); }}
               className="rounded-3xl bg-stone-50 text-emerald-950 p-6 text-left shadow-2xl transition hover:-translate-y-1 motion-reduce:transition-none motion-reduce:hover:translate-y-0 focus:outline-none focus:ring-4 focus:ring-amber-400">
@@ -994,20 +1012,16 @@ export default function MahjongCoach() {
         </div>
 
         <div className="w-full max-w-6xl mx-auto text-center text-amber-200 text-2xl sm:text-3xl font-black mb-2">🎉 Here's how your hand won 🎉</div>
-        <p className="w-full max-w-6xl mx-auto text-center text-emerald-200 text-base mb-5">Four sets of three, and a pair.</p>
+        <p className="w-full max-w-6xl mx-auto text-center text-emerald-200 text-base mb-5">{lineDef.name}.</p>
 
         {winBreakdown ? (
           <div className="w-full max-w-6xl mx-auto flex flex-wrap gap-3 justify-center mb-6">
-            {winBreakdown.sets.map((set, i) => (
-              <div key={i} className="rounded-2xl bg-emerald-800/60 p-3 flex flex-col items-center gap-2">
-                <div className="text-xs uppercase tracking-widest text-emerald-300 font-bold">Set {i + 1}</div>
-                <div className="flex gap-1.5">{set.map((t) => <Tile key={t.id} tile={t} small />)}</div>
+            {winBreakdown.groups.map((g, i) => (
+              <div key={i} className={`rounded-2xl p-3 flex flex-col items-center gap-2 ${g.label === "Pair" ? "bg-amber-500/20 border-2 border-amber-400" : "bg-emerald-800/60"}`}>
+                <div className={`text-xs uppercase tracking-widest font-bold ${g.label === "Pair" ? "text-amber-300" : "text-emerald-300"}`}>{g.label}</div>
+                <div className="flex gap-1.5">{g.tiles.map((t) => <Tile key={t.id} tile={t} small />)}</div>
               </div>
             ))}
-            <div className="rounded-2xl bg-amber-500/20 border-2 border-amber-400 p-3 flex flex-col items-center gap-2">
-              <div className="text-xs uppercase tracking-widest text-amber-300 font-bold">The pair</div>
-              <div className="flex gap-1.5">{winBreakdown.pair.map((t) => <Tile key={t.id} tile={t} small />)}</div>
-            </div>
           </div>
         ) : (
           // Fallback (shouldn't happen for a real win): show all her tiles.
@@ -1040,7 +1054,7 @@ export default function MahjongCoach() {
       </div>
 
       <div className="w-full max-w-6xl mx-auto -mt-2 mb-3 text-center text-emerald-300 text-sm font-semibold">
-        Level: {DIFFICULTY[difficulty].label}
+        Level: {DIFFICULTY[difficulty].label}{mode === "learn" ? ` · Goal: ${lineDef.name}` : ""}
       </div>
 
       {canDeclareWin && (
@@ -1061,14 +1075,14 @@ export default function MahjongCoach() {
 
       {mode === "learn" && !inCharleston && phase !== "won" && phase !== "botwon" && phase !== "wallgame" && (
         <div className="w-full max-w-6xl mx-auto mb-4 rounded-3xl bg-emerald-800/40 p-4">
-          <div className="text-sm uppercase tracking-widest text-emerald-300 mb-3 font-bold text-center">Your goal — four sets and a pair</div>
-          <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
-            {goalSlots.setSlots.map((s, i) => <Slot key={i} state={s} label={`Set ${i + 1}`} />)}
-            <span className="text-emerald-300 text-3xl font-black px-1" aria-hidden="true">+</span>
-            <Slot state={goalSlots.pairState} label="The pair" pair />
+          <div className="text-sm uppercase tracking-widest text-emerald-300 mb-3 font-bold text-center">Your goal — {lineDef.name}</div>
+          <div className="flex items-center justify-center gap-2 flex-wrap">
+            {progress.slots.map((s, i) => <Slot key={i} state={s.state} kind={s.kind} />)}
           </div>
           <p className="text-center text-emerald-300 text-xs sm:text-sm mt-3">
-            Solid gold ✓ = locked in &amp; safe. A gold <span className="text-amber-300 font-bold">outline ○</span> means you're holding those tiles{hintsOn ? " (lit up below)" : ""} but haven't locked them. Tap three matching tiles to “Make this set,” or two matching tiles to “Make this my pair.”
+            {pairsLine
+              ? `Collect seven matching pairs in your hand (Jokers can't go in a pair). A gold outline ○${hintsOn ? " (lit up below)" : ""} marks a pair you're holding; press “I think I won!” when you have all seven.`
+              : <>Solid gold ✓ = locked in &amp; safe. A gold <span className="text-amber-300 font-bold">outline ○</span> means you're holding those tiles{hintsOn ? " (lit up below)" : ""} but haven't locked them. Tap matching tiles to “Make this set,” “Make this kong,” or “Make this my pair.”</>}
           </p>
         </div>
       )}
@@ -1132,8 +1146,8 @@ export default function MahjongCoach() {
             {isPassPhase ? ` — tap 3 to pass (${selected.length}/3)`
               : isCourtesy ? ` — tap up to 3 to trade (${selected.length})`
               : phase === "charleston-2ask" ? ""
-              : phase === "discard" ? " — tap to let go · 2 = pair, 3 = set, 4 = kong · drag to rearrange"
-              : phase === "draw" ? " — drag to rearrange · 2 = pair, 3 = set, 4 = kong"
+              : phase === "discard" ? (pairsLine ? " — tap to let go · collect pairs · drag to rearrange" : " — tap to let go · 2 = pair, 3 = set, 4 = kong · drag to rearrange")
+              : phase === "draw" ? (pairsLine ? " — drag to rearrange · collect pairs" : " — drag to rearrange · 2 = pair, 3 = set, 4 = kong")
               : ""}
           </div>
           {canArrange && hand.length > 0 && (
@@ -1169,7 +1183,18 @@ export default function MahjongCoach() {
 
       {(phase === "draw" || phase === "discard") && selected.length > 0 && (
         <div className="w-full max-w-6xl mx-auto flex flex-wrap items-center gap-3 mb-3">
-          {selected.length === 4 ? (
+          {pairsLine ? (
+            phase === "discard" && selected.length === 1 ? (
+              <button onClick={letItGo}
+                className="flex-1 min-w-[12rem] rounded-2xl bg-emerald-700 hover:bg-emerald-600 text-white text-xl font-bold py-4 focus:outline-none focus:ring-4 focus:ring-amber-300">
+                Let this tile go
+              </button>
+            ) : (
+              <p className="flex-1 min-w-[12rem] text-emerald-100 text-lg font-semibold self-center">
+                In this hand you just collect seven pairs — no sets to make. Keep matching pairs and let the rest go.
+              </p>
+            )
+          ) : selected.length === 4 ? (
             <button onClick={makeKong} disabled={!canMakeKong}
               className="flex-1 min-w-[12rem] rounded-2xl bg-amber-500 text-emerald-950 text-xl font-black py-4 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
               {canMakeKong ? "Make this kong (4) ✓" : "Those four don't match — try again"}
