@@ -67,6 +67,23 @@ Sources: see bottom.
 
 ## The gaps, prioritized & sequenced
 
+### Progress
+
+- ✅ **#1 Wall game** — finite wall; gentle "wall game" draw when tiles run out.
+- ✅ **#2 Kong** — win goal expanded to **4 sets of three OR four + a pair**;
+  "Make this kong" + replacement draw; calling a kong off a discard (hold 3).
+- ⏭️ Next in sequence: **#3 opponents win off her discard**, then **#4 claiming + priority**.
+
+### NEW request (from Kyle): let HER choose the winning line
+
+She should be able to pick/define **what counts as her winning hand** (not just
+our fixed "4 sets + pair"). This is the "Practice my card" idea brought into the
+main game — e.g. a small menu of simple target patterns, or her own typed
+target, with the coach steering toward it. *Scope: in (it's the heart of the
+product). Slot after the claiming system (#4), or sooner if preferred — it's a
+larger design piece (a target-pattern picker + win-check against the chosen
+target). Tracking it here so it's not lost.*
+
 ### P0 — correctness & "feels real" (do first; small, self-contained)
 
 1. **Opponents can win off HER discard (Mahjong-on-discard).**

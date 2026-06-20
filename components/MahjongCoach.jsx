@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from "react";
 import { Volume2, VolumeX, Mic, HelpCircle, RotateCcw, ArrowRight, BadgeCheck, Lightbulb, LightbulbOff } from "lucide-react";
-import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, pickAssistedDrawIndex, coachFacts, chooseDiscard, decomposeWin, handGroups } from "@/lib/tiles";
+import { buildWall, sortHand, makeTile, isWinningHand, localHint, analyzeHand, isValidSet, isValidKong, pickAssistedDrawIndex, coachFacts, chooseDiscard, decomposeWin, handGroups } from "@/lib/tiles";
 import { buildSystemPrompt, callCoach } from "@/lib/coach";
 
 // Where the in-progress game is auto-saved on her device (localStorage). Bump
@@ -265,6 +265,7 @@ export default function MahjongCoach() {
   // Which three currently-selected concealed tiles (if any) form a valid set.
   const selectedTiles = useMemo(() => hand.filter((t) => selected.includes(t.id)), [hand, selected]);
   const canMakeSet = selected.length === 3 && isValidSet(selectedTiles);
+  const canMakeKong = selected.length === 4 && isValidKong(selectedTiles);
   // Two matching REAL tiles she can commit as her pair (jokers never in the pair).
   const canMakePair = selected.length === 2 && !lockedPair &&
     selectedTiles.length === 2 && !selectedTiles[0].isJoker && !selectedTiles[1].isJoker &&
@@ -440,7 +441,7 @@ export default function MahjongCoach() {
 
   const toggleSelect = (tile) => {
     setHighlightIds([]); // she's choosing now — let her own selection lead
-    setSelected((s) => s.includes(tile.id) ? s.filter((x) => x !== tile.id) : s.length < 3 ? [...s, tile.id] : s);
+    setSelected((s) => s.includes(tile.id) ? s.filter((x) => x !== tile.id) : s.length < 4 ? [...s, tile.id] : s);
   };
 
   const passCharleston = () => {
@@ -627,11 +628,40 @@ export default function MahjongCoach() {
     setHand(keep);
     setExposed(newExposed);
     setSelected([]);
-    const full = [...keep, ...newExposed.flat()];
+    const full = [...keep, ...newExposed.flat(), ...(lockedPair || [])];
     if (mode === "learn" && phase === "discard" && isWinningHand(full)) {
       say("Lovely — that set is locked in, and I think you have a winning hand now! Press “I think I won!” when you're ready.");
     } else {
       say(phase === "discard" ? "Lovely — that set is locked in and safe. Now let one tile go." : "Lovely — that set is locked in and safe. Take a tile when you're ready.");
+    }
+  };
+
+  // "Make this kong" — lock four matching (Joker-wild) tiles as a kong, and
+  // draw a replacement tile (a kong is worth an extra tile). She ends up with a
+  // tile to let go, so we land in the discard step.
+  const makeKong = () => {
+    if (!canMakeKong) return;
+    const kongTiles = hand.filter((t) => selected.includes(t.id));
+    const keep = hand.filter((t) => !selected.includes(t.id));
+    // Replacement draw (assisted on Easy, like her normal draw).
+    let newHand = keep, restWall = wall;
+    if (wall.length > 0) {
+      const idx = mode === "learn" && DIFFICULTY[difficulty].herAssist ? pickAssistedDrawIndex(wall, keep) : 0;
+      newHand = [...keep, wall[idx]];
+      restWall = [...wall.slice(0, idx), ...wall.slice(idx + 1)];
+    }
+    const newExposed = [...exposed, kongTiles];
+    setHand(newHand);
+    setExposed(newExposed);
+    setWall(restWall);
+    setSelected([]);
+    setHighlightIds([]);
+    setPhase("discard");
+    const full = [...newHand, ...newExposed.flat(), ...(lockedPair || [])];
+    if (mode === "learn" && isWinningHand(full)) {
+      say("A kong — four of a kind! And I think that's a winning hand. Press “I think I won!” when you're ready.");
+    } else {
+      say("A kong — four of a kind, locked in, and you drew a replacement tile. Now let one tile go.");
     }
   };
 
@@ -655,23 +685,38 @@ export default function MahjongCoach() {
 
   const takeCall = () => {
     if (!callable) return;
+    // If she already holds three of this tile, the call makes a KONG (4) and she
+    // draws a replacement; otherwise it's a pung (3). Jokers never count here.
+    const have = hand.filter((t) => t.key === callable.key && !t.isJoker).length;
+    const kong = have >= 3;
+    const removeCount = kong ? 3 : 2;
     let removed = 0; const keep = [];
     for (const t of hand) {
-      if (removed < 2 && t.key === callable.key && !t.isJoker) { removed++; continue; }
+      if (removed < removeCount && t.key === callable.key && !t.isJoker) { removed++; continue; }
       keep.push(t);
     }
-    const newExposed = [...exposed, [makeTile(callable.key, callable.glyph, callable.label), makeTile(callable.key, callable.glyph, callable.label), callable]];
+    const copy = () => makeTile(callable.key, callable.glyph, callable.label);
+    const group = kong ? [copy(), copy(), copy(), callable] : [copy(), copy(), callable];
+    const newExposed = [...exposed, group];
+    // Replacement draw for a kong.
+    let newHand = keep, restWall = wall;
+    if (kong && wall.length > 0) {
+      const idx = mode === "learn" && DIFFICULTY[difficulty].herAssist ? pickAssistedDrawIndex(wall, keep) : 0;
+      newHand = [...keep, wall[idx]];
+      restWall = [...wall.slice(0, idx), ...wall.slice(idx + 1)];
+    }
     setExposed(newExposed);
-    setHand(keep);
+    setHand(newHand);
+    setWall(restWall);
     setDiscards((d) => d.filter((x) => x !== callable)); // taken off the table
     setCallable(null);
     setSelected([]);
     setPhase("discard");
-    const full = [...keep, ...newExposed.flat()];
+    const full = [...newHand, ...newExposed.flat(), ...(lockedPair || [])];
     if (mode === "learn" && isWinningHand(full)) {
-      say("Nice grab — and I think that completes a winning hand! Press “I think I won!” when you're ready, or keep arranging first.");
+      say(kong ? "A kong off the table — four of a kind! I think that's a winning hand. Press “I think I won!”." : "Nice grab — and I think that completes a winning hand! Press “I think I won!” when you're ready.");
     } else {
-      say("Nice grab — that set is locked in and safe. Now let one tile go.");
+      say(kong ? "A kong — four of a kind, locked in, and you drew a replacement. Now let one tile go." : "Nice grab — that set is locked in and safe. Now let one tile go.");
     }
   };
 
@@ -960,8 +1005,8 @@ export default function MahjongCoach() {
           <div className="text-sm uppercase tracking-widest text-emerald-300 font-bold">
             Your tiles
             {inCharleston ? ` — tap 3 to pass (${selected.length}/3)`
-              : phase === "discard" ? " — tap to let go · tap 3 = set, 2 = pair · drag to rearrange"
-              : phase === "draw" ? " — drag to rearrange · tap 3 = set, 2 = pair"
+              : phase === "discard" ? " — tap to let go · 2 = pair, 3 = set, 4 = kong · drag to rearrange"
+              : phase === "draw" ? " — drag to rearrange · 2 = pair, 3 = set, 4 = kong"
               : ""}
           </div>
           {canArrange && hand.length > 0 && (
@@ -997,7 +1042,12 @@ export default function MahjongCoach() {
 
       {(phase === "draw" || phase === "discard") && selected.length > 0 && (
         <div className="w-full max-w-6xl mx-auto flex flex-wrap items-center gap-3 mb-3">
-          {selected.length === 3 ? (
+          {selected.length === 4 ? (
+            <button onClick={makeKong} disabled={!canMakeKong}
+              className="flex-1 min-w-[12rem] rounded-2xl bg-amber-500 text-emerald-950 text-xl font-black py-4 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
+              {canMakeKong ? "Make this kong (4) ✓" : "Those four don't match — try again"}
+            </button>
+          ) : selected.length === 3 ? (
             <button onClick={makeSet} disabled={!canMakeSet}
               className="flex-1 min-w-[12rem] rounded-2xl bg-amber-500 text-emerald-950 text-xl font-black py-4 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
               {canMakeSet ? "Make this set ✓" : "Those three don't match — try again"}
