@@ -39,11 +39,14 @@ const CHARLESTON_SAY = {
 // `claimWin`: may an opponent complete THEIR hand off HER discard (declare
 // Mahjong on a discard)? Gated so Easy/Normal stay gentle and only Hard/Advanced
 // introduce that real threat.
+// `pace` is the ms between each opponent's discard appearing — slower on the
+// gentle levels so a beginner can actually follow the table and notice when a
+// tile becomes hers to take.
 const DIFFICULTY = {
-  easy:     { label: "Easy",     blurb: "I help you a lot, and the others play simply.", herAssist: true,  botAssist: 0,   claimWin: false, botClaims: false },
-  normal:   { label: "Normal",   blurb: "Everyone draws their own tiles; the others play simply.", herAssist: false, botAssist: 0,   claimWin: false, botClaims: false },
-  hard:     { label: "Hard",     blurb: "The other players are sharper — they grab discards and can win off yours.", herAssist: false, botAssist: 0.6, claimWin: true, botClaims: true },
-  advanced: { label: "Advanced", blurb: "The other players are masters — a real challenge!", herAssist: false, botAssist: 1,   claimWin: true, botClaims: true },
+  easy:     { label: "Easy",     blurb: "I help you a lot, and the others play simply.", herAssist: true,  botAssist: 0,   claimWin: false, botClaims: false, pace: 1600 },
+  normal:   { label: "Normal",   blurb: "Everyone draws their own tiles; the others play simply.", herAssist: false, botAssist: 0,   claimWin: false, botClaims: false, pace: 1300 },
+  hard:     { label: "Hard",     blurb: "The other players are sharper — they grab discards and can win off yours.", herAssist: false, botAssist: 0.6, claimWin: true, botClaims: true, pace: 950 },
+  advanced: { label: "Advanced", blurb: "The other players are masters — a real challenge!", herAssist: false, botAssist: 1,   claimWin: true, botClaims: true, pace: 700 },
 };
 const DIFF_ORDER = ["easy", "normal", "hard", "advanced"];
 const DIFF_KEY = "mahjong-together:difficulty"; // remembers her last choice across visits
@@ -605,7 +608,7 @@ export default function MahjongCoach() {
     setPhase("bots");
     say("Let's see what the other players do.");
 
-    const STEP = 700;
+    const STEP = DIFFICULTY[difficulty].pace ?? 1300; // slow enough to follow on gentle levels
     const lastReveal = winner >= 0 ? winner : 2;
     for (let i = 0; i <= lastReveal; i++) {
       botTimersRef.current.push(setTimeout(() => {
@@ -654,8 +657,8 @@ export default function MahjongCoach() {
         setCallable(claim);
         setPhase("call");
         say(herWin
-          ? `The ${claim.label} completes your hand! Others wanted it, but a winning claim comes first. Press “Take it”, then “I think I won!”.`
-          : `That ${claim.label} would finish a set for you! Press “Take it” to grab it, or “Leave it” to wait.`);
+          ? `The ${claim.label} completes your hand! Others wanted it, but a winning claim comes first. Take your time — press “Take it”, then “I think I won!”.`
+          : `Wait — that ${claim.label} would finish a set for you! Take your time: press “Take it” to grab it, or “Leave it” to pass. It will wait for you.`);
       } else if (w.length === 0) {
         endWallGame(); // the wall ran dry and nobody finished
       } else {
@@ -1176,12 +1179,16 @@ export default function MahjongCoach() {
                 // Re-keyed by tile id so the toss animation replays each round.
                 <div key={t.id} className="animate-toss flex flex-col items-center gap-1">
                   {phase === "call" && callable && t.id === callable.id ? (
-                    <Tile tile={t} small highlight onClick={takeCall} />
+                    <div className="rounded-xl ring-4 ring-amber-300 animate-pulse motion-reduce:animate-none">
+                      <Tile tile={t} small highlight onClick={takeCall} />
+                    </div>
                   ) : (
                     <Tile tile={t} small dim />
                   )}
-                  <div className="text-xs font-semibold text-emerald-200">
-                    {phase === "call" && callable && t.id === callable.id ? "tap to take!" : "let this go"}
+                  <div className={phase === "call" && callable && t.id === callable.id
+                    ? "text-sm font-black text-amber-300"
+                    : "text-xs font-semibold text-emerald-200"}>
+                    {phase === "call" && callable && t.id === callable.id ? "tap to take! 👆" : "let this go"}
                   </div>
                 </div>
               ) : (
@@ -1348,7 +1355,7 @@ export default function MahjongCoach() {
         </div>
       ) : phase === "call" ? (
         <div className="w-full max-w-6xl mx-auto flex gap-3 mb-4">
-          <button onClick={takeCall} className="flex-1 rounded-2xl bg-amber-500 text-emerald-950 text-2xl font-black py-5 focus:outline-none focus:ring-4 focus:ring-amber-300">Take it ({callable?.label})</button>
+          <button onClick={takeCall} className="flex-1 rounded-2xl bg-amber-500 text-emerald-950 text-2xl font-black py-5 ring-4 ring-amber-300 animate-pulse motion-reduce:animate-none focus:outline-none focus:ring-4 focus:ring-amber-200">Take it ({callable?.label})</button>
           <button onClick={leaveCall} className="flex-1 rounded-2xl bg-emerald-700 text-white text-2xl font-bold py-5 focus:outline-none focus:ring-4 focus:ring-amber-300">Leave it</button>
         </div>
       ) : (
