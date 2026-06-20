@@ -1185,7 +1185,7 @@ export default function MahjongCoach() {
           <div ref={rackRef} className="flex flex-nowrap gap-1.5 w-full justify-center">
             {hand.map((t) => (
               <Tile key={t.id} tile={t} selected={selected.includes(t.id)} fill
-                highlight={hintsOn && (hintIds.has(t.id) || highlightIds.includes(t.id))}
+                highlight={hintsOn && myTurn && (hintIds.has(t.id) || highlightIds.includes(t.id))}
                 draggable={canArrange}
                 dragging={dragId === t.id}
                 onPointerDown={canArrange ? (e) => onTilePointerDown(e, t) : undefined}
