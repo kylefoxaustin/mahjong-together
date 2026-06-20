@@ -39,18 +39,29 @@ const CHARLESTON_SAY = {
 // `claimWin`: may an opponent complete THEIR hand off HER discard (declare
 // Mahjong on a discard)? Gated so Easy/Normal stay gentle and only Hard/Advanced
 // introduce that real threat.
-// `pace` is the ms between each opponent's discard appearing — slower on the
-// gentle levels so a beginner can actually follow the table and notice when a
-// tile becomes hers to take.
 const DIFFICULTY = {
-  easy:     { label: "Easy",     blurb: "I help you a lot, and the others play simply.", herAssist: true,  botAssist: 0,   claimWin: false, botClaims: false, pace: 1600 },
-  normal:   { label: "Normal",   blurb: "Everyone draws their own tiles; the others play simply.", herAssist: false, botAssist: 0,   claimWin: false, botClaims: false, pace: 1300 },
-  hard:     { label: "Hard",     blurb: "The other players are sharper — they grab discards and can win off yours.", herAssist: false, botAssist: 0.6, claimWin: true, botClaims: true, pace: 950 },
-  advanced: { label: "Advanced", blurb: "The other players are masters — a real challenge!", herAssist: false, botAssist: 1,   claimWin: true, botClaims: true, pace: 700 },
+  easy:     { label: "Easy",     blurb: "I help you a lot, and the others play simply.", herAssist: true,  botAssist: 0,   claimWin: false, botClaims: false },
+  normal:   { label: "Normal",   blurb: "Everyone draws their own tiles; the others play simply.", herAssist: false, botAssist: 0,   claimWin: false, botClaims: false },
+  hard:     { label: "Hard",     blurb: "The other players are sharper — they grab discards and can win off yours.", herAssist: false, botAssist: 0.6, claimWin: true, botClaims: true },
+  advanced: { label: "Advanced", blurb: "The other players are masters — a real challenge!", herAssist: false, botAssist: 1,   claimWin: true, botClaims: true },
 };
 const DIFF_ORDER = ["easy", "normal", "hard", "advanced"];
+
+// How long each opponent "thinks" before discarding. `maxMs` is the upper bound
+// of a random ponder (each bot takes a fresh random ~1s..maxMs, one after the
+// other); `instant` reveals them on a brisk fixed beat. Default is a comfortable
+// 20 seconds. She can always press "Skip ahead" to jump the wait.
+const SPEEDS = {
+  instant: { label: "Instant",      blurb: "They move right away.",            instant: true },
+  s20:     { label: "Up to 20 sec", blurb: "A short, comfortable pause.",      maxMs: 20000 },
+  s50:     { label: "Up to 50 sec", blurb: "A longer, real-table think.",      maxMs: 50000 },
+  s75:     { label: "Up to 75 sec", blurb: "Plenty of time, like a slow game.", maxMs: 75000 },
+};
+const SPEED_ORDER = ["instant", "s20", "s50", "s75"];
+const DEFAULT_SPEED = "s20";
+
 const DIFF_KEY = "mahjong-together:difficulty"; // remembers her last choice across visits
-const FAST_KEY = "mahjong-together:fast"; // "Quick play" vs realistic opponent pacing
+const SPEED_KEY = "mahjong-together:speed"; // remembers how long the opponents think
 const HINTS_KEY = "mahjong-together:hints"; // remembers the on-screen-hints toggle
 const LINE_KEY = "mahjong-together:line"; // remembers the winning line she chases
 
@@ -261,7 +272,7 @@ export default function MahjongCoach() {
   const [dragId, setDragId] = useState(null); // tile currently being dragged (for styling)
   const [savedGame, setSavedGame] = useState(null); // a resumable auto-saved game, surfaced as "Continue" on the menu
   const [isStandalone, setIsStandalone] = useState(false); // true when already installed as an app (hides the install tip)
-  const [fastMode, setFastMode] = useState(false); // "Quick play": brisk bot turns instead of realistic 5–45s thinking
+  const [speed, setSpeedState] = useState(DEFAULT_SPEED); // how long the opponents "think" before discarding
   const hydratedRef = useRef(false); // becomes true once a saved game has been restored (or none found)
   const botTimersRef = useRef([]); // pending setTimeout ids for the staged opponent turns
   const fastForwardRef = useRef(null); // set during a bots round so "Skip ahead" can fast-forward it
@@ -350,7 +361,8 @@ export default function MahjongCoach() {
       if (linePref && LINES[linePref]) setLine(linePref);
       const hp = localStorage.getItem(HINTS_KEY);
       if (hp === "0") setHintsOn(false);
-      if (localStorage.getItem(FAST_KEY) === "1") setFastMode(true);
+      const sp = localStorage.getItem(SPEED_KEY);
+      if (sp && SPEEDS[sp]) setSpeedState(sp);
       const raw = localStorage.getItem(SAVE_KEY);
       const s = raw && JSON.parse(raw);
       const terminal = s && ["won", "botwon", "wallgame"].includes(s.phase);
@@ -439,10 +451,10 @@ export default function MahjongCoach() {
     try { localStorage.setItem(DIFF_KEY, key); } catch { /* ignore */ }
   }, []);
 
-  // "Quick play" vs realistic opponent pacing (remembered across visits).
-  const setFast = useCallback((on) => {
-    setFastMode(on);
-    try { localStorage.setItem(FAST_KEY, on ? "1" : "0"); } catch { /* ignore */ }
+  // How long the opponents think before discarding (remembered across visits).
+  const setSpeed = useCallback((key) => {
+    setSpeedState(key);
+    try { localStorage.setItem(SPEED_KEY, key); } catch { /* ignore */ }
   }, []);
 
   // Pick (and remember) which winning line she's chasing.
@@ -616,7 +628,8 @@ export default function MahjongCoach() {
     setWall(w); setBotHands(bots); setDiscards(disc);
     setSelected([]); setCallable(null); setBotDiscards([null, null, null]);
     setPhase("bots");
-    say(fastMode
+    const spd = SPEEDS[speed] || SPEEDS[DEFAULT_SPEED];
+    say(spd.instant
       ? "Let's see what the other players do."
       : "The other players are taking their turns. Take all the time you need — or press “Skip ahead” to hurry them along.");
 
@@ -686,25 +699,26 @@ export default function MahjongCoach() {
       resolve();
     };
 
-    if (fastMode) {
-      // Quick play: a brisk, steady cadence (per-level pace).
-      const STEP = DIFFICULTY[difficulty].pace ?? 1300;
+    if (spd.instant) {
+      // Instant: a brisk, steady beat so the tosses are still readable.
+      const STEP = 280;
       for (let i = 0; i <= lastReveal; i++) {
         botTimersRef.current.push(setTimeout(() => reveal(i), STEP * (i + 1)));
       }
       botTimersRef.current.push(setTimeout(resolve, STEP * (lastReveal + 2)));
     } else {
-      // Realistic: each opponent ponders a random 5–45 seconds before discarding,
-      // one after another, like real people at the table.
+      // Each opponent ponders a fresh random ~1s..maxMs before discarding, one
+      // after another, like real people at the table.
+      const FLOOR = Math.min(1000, spd.maxMs);
       let at = 0;
       for (let i = 0; i <= lastReveal; i++) {
-        at += 5000 + Math.random() * 40000;
+        at += FLOOR + Math.random() * (spd.maxMs - FLOOR);
         const when = at;
         botTimersRef.current.push(setTimeout(() => reveal(i), when));
       }
       botTimersRef.current.push(setTimeout(resolve, at + 900));
     }
-  }, [wall, discards, botHands, exposed, lockedPair, difficulty, mode, line, fastMode, endWallGame, say]);
+  }, [wall, discards, botHands, exposed, lockedPair, difficulty, mode, line, speed, endWallGame, say]);
 
   // "Skip ahead" button during the opponents' turns — hurry them without waiting.
   const skipBots = useCallback(() => {
@@ -1072,23 +1086,22 @@ export default function MahjongCoach() {
           </div>
 
           <div className="mb-8 text-left">
-            <div className="text-emerald-200 text-sm font-bold uppercase tracking-widest mb-2 text-center">How fast do the other players go?</div>
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                { on: false, label: "Realistic", blurb: "They pause to think, like real people. No rush — you can skip the wait anytime." },
-                { on: true, label: "Quick play", blurb: "They play right along, so the game moves fast." },
-              ].map((opt) => {
-                const active = fastMode === opt.on;
+            <div className="text-emerald-200 text-sm font-bold uppercase tracking-widest mb-2 text-center">How long do the other players think?</div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {SPEED_ORDER.map((key) => {
+                const s = SPEEDS[key];
+                const active = speed === key;
                 return (
-                  <button key={opt.label} onClick={() => setFast(opt.on)} aria-pressed={active}
+                  <button key={key} onClick={() => setSpeed(key)} aria-pressed={active}
                     className={`rounded-2xl p-3 border-4 transition motion-reduce:transition-none focus:outline-none focus:ring-4 focus:ring-amber-300
                       ${active ? "bg-amber-400 border-amber-300 text-emerald-950" : "bg-emerald-800/60 border-emerald-700 text-emerald-100 hover:bg-emerald-700/60"}`}>
-                    <div className="text-lg font-black">{opt.label}</div>
-                    <div className={`text-xs font-semibold mt-1 ${active ? "text-emerald-900" : "text-emerald-300"}`}>{opt.blurb}</div>
+                    <div className="text-base font-black">{s.label}</div>
+                    <div className={`text-xs font-semibold mt-1 ${active ? "text-emerald-900" : "text-emerald-300"}`}>{s.blurb}</div>
                   </button>
                 );
               })}
             </div>
+            <p className="text-emerald-300 text-xs text-center mt-2">You can always press “Skip ahead” to jump the wait.</p>
           </div>
 
           <div className="grid sm:grid-cols-2 gap-4">
