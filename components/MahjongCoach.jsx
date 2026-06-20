@@ -150,10 +150,10 @@ function Tile({ tile, onClick, selected, dim, small, draggable, dragging, fill, 
   // are. Non-fill tiles use a fixed pixel size.
   const w = small ? 60 : 84, h = small ? 92 : 132;
   const suited = /^(\d) (Crak|Bam|Dot)$/.exec(tile.label);
-  const glyphFs = fill ? (tile.isJoker ? "44cqw" : "64cqw") : (tile.isJoker ? (small ? 26 : 40) : (small ? 34 : 54));
-  const numFs = fill ? "40cqw" : (small ? 20 : 34);
-  const subFs = fill ? "17cqw" : (small ? 9 : 14);
-  const labelFs = fill ? "16cqw" : (small ? 10 : 14);
+  const glyphFs = fill ? (tile.isJoker ? "54cqw" : "76cqw") : (tile.isJoker ? (small ? 26 : 40) : (small ? 34 : 54));
+  const numFs = fill ? "48cqw" : (small ? 20 : 34);
+  const subFs = fill ? "20cqw" : (small ? 9 : 14);
+  const labelFs = fill ? "19cqw" : (small ? 10 : 14);
   return (
     <button
       onClick={onClick}
@@ -175,7 +175,7 @@ function Tile({ tile, onClick, selected, dim, small, draggable, dragging, fill, 
           : "border-stone-400"}
         ${dim ? "opacity-70" : ""}`}
       style={fill
-        ? { flex: "1 1 0", minWidth: 0, maxWidth: 108, aspectRatio: "84 / 132", containerType: "inline-size" }
+        ? { flex: "1 1 0", minWidth: 0, maxWidth: 124, aspectRatio: "84 / 132", containerType: "inline-size" }
         : { width: w, height: h }}
     >
       <span aria-hidden="true" className="flex w-full items-center justify-center overflow-hidden text-stone-700 pt-0.5" style={{ fontSize: glyphFs, lineHeight: 1 }}>{tile.glyph}</span>
