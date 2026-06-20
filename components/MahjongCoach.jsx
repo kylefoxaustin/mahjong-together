@@ -349,10 +349,12 @@ export default function MahjongCoach() {
         setDiscards(s.discards || []);
         setBotDiscards(s.botDiscards || [null, null, null]);
         setBotHands(s.botHands || [[], [], []]);
-        setCallable(s.callable || null);
-        // "bots" is a transient, timer-driven phase — if she refreshed mid
-        // opponent-turn, just hand the turn back to her (state is committed).
-        setPhase(s.phase === "bots" ? "draw" : (s.phase || "draw"));
+        // A Seven-pairs game never has a real call; drop any stale callable.
+        const pairsRestore = LINES[s.line]?.structure === "pairs";
+        setCallable(pairsRestore ? null : (s.callable || null));
+        // "bots" is transient (timer-driven), and "call" doesn't belong to a
+        // pairs line — in either case just hand the turn back to her.
+        setPhase(s.phase === "bots" || (pairsRestore && s.phase === "call") ? "draw" : (s.phase || "draw"));
         setCoach(s.coach || "");
         if (typeof s.voiceOn === "boolean") setVoiceOn(s.voiceOn);
         setScreen("game");
@@ -823,6 +825,8 @@ export default function MahjongCoach() {
 
   const takeCall = () => {
     if (!callable) return;
+    // Seven pairs never claims a discard for a set — leave it.
+    if (pairsLine) { leaveCall(); return; }
     // If she already holds three of this tile, the call makes a KONG (4) and she
     // draws a replacement; otherwise it's a pung (3). Jokers never count here.
     const have = hand.filter((t) => t.key === callable.key && !t.isJoker).length;
