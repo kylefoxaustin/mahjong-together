@@ -16,11 +16,14 @@ const SEAT_NAMES = ["Left player", "Across", "Right player"];
 // gentle "she can't lose" mode); `botAssist` is how often each opponent draws
 // toward completing its OWN hand (0 = blind/basic, 1 = master). Everyone draws
 // from the same shuffled wall — higher levels just make the opponents sharper.
+// `claimWin`: may an opponent complete THEIR hand off HER discard (declare
+// Mahjong on a discard)? Gated so Easy/Normal stay gentle and only Hard/Advanced
+// introduce that real threat.
 const DIFFICULTY = {
-  easy:     { label: "Easy",     blurb: "I help you a lot, and the others play simply.", herAssist: true,  botAssist: 0 },
-  normal:   { label: "Normal",   blurb: "Everyone draws their own tiles; the others play simply.", herAssist: false, botAssist: 0 },
-  hard:     { label: "Hard",     blurb: "The other players are sharper and play to win.", herAssist: false, botAssist: 0.6 },
-  advanced: { label: "Advanced", blurb: "The other players are masters — a real challenge!", herAssist: false, botAssist: 1 },
+  easy:     { label: "Easy",     blurb: "I help you a lot, and the others play simply.", herAssist: true,  botAssist: 0,   claimWin: false },
+  normal:   { label: "Normal",   blurb: "Everyone draws their own tiles; the others play simply.", herAssist: false, botAssist: 0,   claimWin: false },
+  hard:     { label: "Hard",     blurb: "The other players are sharper and can win off your discards.", herAssist: false, botAssist: 0.6, claimWin: true },
+  advanced: { label: "Advanced", blurb: "The other players are masters — a real challenge!", herAssist: false, botAssist: 1,   claimWin: true },
 };
 const DIFF_ORDER = ["easy", "normal", "hard", "advanced"];
 const DIFF_KEY = "mahjong-together:difficulty"; // remembers her last choice across visits
@@ -569,6 +572,18 @@ export default function MahjongCoach() {
     setHand(newHand);
     setDiscards((d) => [...d, tile]);
     setSelected([]);
+    // #3: at Hard/Advanced, an opponent may complete THEIR hand off her discard.
+    if (mode === "learn" && DIFFICULTY[difficulty].claimWin) {
+      const claimer = botHands.findIndex((bh) => isWinningHand([...bh, tile]));
+      if (claimer >= 0) {
+        clearBotTimers();
+        setBotHands((hs) => hs.map((bh, i) => (i === claimer ? [...bh, tile] : bh)));
+        setBotDiscards([null, null, null]);
+        setPhase("botwon");
+        say(`${SEAT_NAMES[claimer]} called your ${tile.label} to complete their hand — Mahjong for them this round! You'll get the next one. Press “Play again” when you're ready.`);
+        return;
+      }
+    }
     playBotsRound(newHand);
   };
   // "Let this tile go" — discards the single selected tile.
