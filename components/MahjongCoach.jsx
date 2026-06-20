@@ -143,15 +143,17 @@ function useSpeech() {
 }
 
 function Tile({ tile, onClick, selected, dim, small, draggable, dragging, fill, highlight, onPointerDown, onPointerMove, onPointerUp }) {
-  // Rack-friendly tile. Glyph and number/suit live in their OWN fixed regions
-  // (top vs. bottom) so they can never overlap, and the glyph region clips so
-  // the image can't spill. The number is the reliable read for low vision.
-  // `fill` lets a hand tile flex to share the rack width (so the whole row is
-  // visible and as large as the screen allows); otherwise it's a fixed size.
+  // Glyph and number/suit live in their own regions (top vs. bottom) so they
+  // never overlap. `fill` hand tiles flex to share the rack width — they always
+  // fit (no horizontal scroll) — and size their glyph/number with container
+  // units (cqw) so everything scales crisply with the tile, however many there
+  // are. Non-fill tiles use a fixed pixel size.
   const w = small ? 60 : 84, h = small ? 92 : 132;
-  const glyphBox = small ? 50 : 74;
-  const glyphSize = tile.isJoker ? (small ? 26 : 40) : (small ? 34 : 54);
   const suited = /^(\d) (Crak|Bam|Dot)$/.exec(tile.label);
+  const glyphFs = fill ? (tile.isJoker ? "44cqw" : "64cqw") : (tile.isJoker ? (small ? 26 : 40) : (small ? 34 : 54));
+  const numFs = fill ? "40cqw" : (small ? 20 : 34);
+  const subFs = fill ? "17cqw" : (small ? 9 : 14);
+  const labelFs = fill ? "16cqw" : (small ? 10 : 14);
   return (
     <button
       onClick={onClick}
@@ -172,16 +174,18 @@ function Tile({ tile, onClick, selected, dim, small, draggable, dragging, fill, 
           : highlight ? "border-yellow-500 ring-4 ring-yellow-300 -translate-y-1 motion-reduce:translate-y-0"
           : "border-stone-400"}
         ${dim ? "opacity-70" : ""}`}
-      style={fill ? { flex: "1 1 0", minWidth: 62, maxWidth: 104, height: h } : { width: w, height: h }}
+      style={fill
+        ? { flex: "1 1 0", minWidth: 0, maxWidth: 108, aspectRatio: "84 / 132", containerType: "inline-size" }
+        : { width: w, height: h }}
     >
-      <span aria-hidden="true" className="flex w-full items-center justify-center overflow-hidden text-stone-700" style={{ height: glyphBox, fontSize: glyphSize, lineHeight: 1 }}>{tile.glyph}</span>
+      <span aria-hidden="true" className="flex w-full items-center justify-center overflow-hidden text-stone-700 pt-0.5" style={{ fontSize: glyphFs, lineHeight: 1 }}>{tile.glyph}</span>
       {suited ? (
         <span className="flex flex-col items-center leading-none pb-1">
-          <span className="font-black text-stone-900" style={{ fontSize: small ? 20 : 34 }}>{suited[1]}</span>
-          <span className="font-bold text-stone-600 uppercase tracking-wide" style={{ fontSize: small ? 9 : 14 }}>{suited[2]}</span>
+          <span className="font-black text-stone-900" style={{ fontSize: numFs }}>{suited[1]}</span>
+          <span className="font-bold text-stone-600 uppercase tracking-wide" style={{ fontSize: subFs }}>{suited[2]}</span>
         </span>
       ) : (
-        <span className="font-black text-stone-900 text-center leading-tight px-0.5 pb-1" style={{ fontSize: small ? 10 : 14 }}>{tile.label}</span>
+        <span className="font-black text-stone-900 text-center leading-tight px-0.5 pb-1" style={{ fontSize: labelFs }}>{tile.label}</span>
       )}
     </button>
   );
@@ -1157,15 +1161,14 @@ export default function MahjongCoach() {
             </button>
           )}
         </div>
-        {/* Single-row rack lined up in front of the player (traditional layout).
-            Fixed-size tiles in a `w-max mx-auto` row: centered when they fit,
-            and when they overflow the row starts at the left edge (margins
-            collapse to 0) so the LEFTMOST tile is always reachable as she
-            scrolls right. She can drag to rearrange; "Tidy up" re-sorts. */}
-        <div className="overflow-x-auto px-1 py-1">
-          <div ref={rackRef} className="flex flex-nowrap gap-1.5 w-max mx-auto px-1">
+        {/* Single-row rack lined up in front of the player. Tiles flex to share
+            the width and ALWAYS fit — no horizontal scroll (which would clip the
+            leftmost tile and fight finger-dragging on touch). They scale their
+            glyph/number with the tile via container units. Drag to rearrange. */}
+        <div className="px-1 py-1">
+          <div ref={rackRef} className="flex flex-nowrap gap-1.5 w-full justify-center">
             {hand.map((t) => (
-              <Tile key={t.id} tile={t} selected={selected.includes(t.id)}
+              <Tile key={t.id} tile={t} selected={selected.includes(t.id)} fill
                 highlight={hintsOn && (hintIds.has(t.id) || highlightIds.includes(t.id))}
                 draggable={canArrange}
                 dragging={dragId === t.id}
