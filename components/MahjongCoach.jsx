@@ -295,6 +295,10 @@ export default function MahjongCoach() {
   // Joker exchange: on her turn, a Joker in one of her locked sets can be
   // reclaimed if she holds the real tile it stands in for.
   const myTurn = phase === "draw" || phase === "discard";
+  // She can ask the coach only when it's her move — never during the opponents'
+  // turn, so the coach can't hand back stale "wait for my turn" advice just as
+  // her turn begins.
+  const canAsk = myTurn || phase === "call";
   const anyJokerRedeemable = myTurn && exposed.some((g) => {
     const realKey = g.find((t) => !t.isJoker)?.key;
     return realKey && g.some((t) => t.isJoker) && hand.some((t) => t.key === realKey && !t.isJoker);
@@ -587,7 +591,8 @@ export default function MahjongCoach() {
       }
       const counts = {};
       herConcealed.forEach((t) => { if (!t.isJoker) counts[t.key] = (counts[t.key] || 0) + 1; });
-      const claim = tosses.find((p) => p && !p.isJoker && counts[p.key] >= 2) || null;
+      // Seven pairs never claims a pung off a discard — there are no sets.
+      const claim = (LINES[line].structure === "pairs") ? null : (tosses.find((p) => p && !p.isJoker && counts[p.key] >= 2) || null);
       if (claim) {
         const cfg = DIFFICULTY[difficulty];
         const di = tosses.indexOf(claim); // the opponent who discarded it
@@ -1305,17 +1310,17 @@ export default function MahjongCoach() {
               : phase === "discard" ? "Let a tile go first"
               : "Take a tile"}
           </button>
-          <button onClick={() => runCoach()} disabled={thinking || hand.length === 0}
+          <button onClick={() => runCoach()} disabled={thinking || hand.length === 0 || !canAsk}
             className="flex-1 rounded-2xl bg-emerald-600 enabled:hover:bg-emerald-500 text-white text-2xl font-bold py-5 flex items-center justify-center gap-3 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
             <HelpCircle size={26} /> What should I do?
           </button>
           {mode === "card" && (
-            <button onClick={checkCard} disabled={thinking}
+            <button onClick={checkCard} disabled={thinking || !canAsk}
               className="flex-1 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-2xl font-bold py-5 flex items-center justify-center gap-3 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">
               <BadgeCheck size={26} /> Did I win?
             </button>
           )}
-          <button onClick={listening ? finishListening : startListening} disabled={!sttSupported || thinking}
+          <button onClick={listening ? finishListening : startListening} disabled={!sttSupported || thinking || (!canAsk && !listening)}
             className={`flex-1 rounded-2xl text-2xl font-bold py-5 flex items-center justify-center gap-3 disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300
               ${listening ? "bg-red-500 text-white animate-pulse motion-reduce:animate-none" : "bg-emerald-600 hover:bg-emerald-500 text-white"}`}>
             <Mic size={26} /> {listening ? "I'm done — ask" : "Ask out loud"}
@@ -1325,10 +1330,10 @@ export default function MahjongCoach() {
 
       <div className="w-full max-w-6xl mx-auto flex gap-2">
         <label htmlFor="coach-question" className="sr-only">Type a question for the coach</label>
-        <input id="coach-question" value={typed} onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => e.key === "Enter" && askTyped()}
-          placeholder="…or type a question for the coach"
-          className="flex-1 rounded-xl px-4 py-3 text-lg text-emerald-950 placeholder-stone-400 focus:outline-none focus:ring-4 focus:ring-amber-400" />
-        <button onClick={askTyped} className="rounded-xl bg-stone-100 text-emerald-950 px-5 py-3 text-lg font-bold hover:bg-white focus:outline-none focus:ring-4 focus:ring-amber-300">Ask</button>
+        <input id="coach-question" value={typed} onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => e.key === "Enter" && canAsk && askTyped()} disabled={!canAsk}
+          placeholder={canAsk ? "…or type a question for the coach" : "…the other players are taking their turn"}
+          className="flex-1 rounded-xl px-4 py-3 text-lg text-emerald-950 placeholder-stone-400 disabled:opacity-50 focus:outline-none focus:ring-4 focus:ring-amber-400" />
+        <button onClick={askTyped} disabled={!canAsk} className="rounded-xl bg-stone-100 text-emerald-950 px-5 py-3 text-lg font-bold hover:bg-white disabled:opacity-40 focus:outline-none focus:ring-4 focus:ring-amber-300">Ask</button>
       </div>
       {!sttSupported && <p className="text-emerald-300 text-sm mt-3 text-center">(Voice questions work in Chrome — the typing box always works.)</p>}
     </Shell>
