@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# native app build artifacts (the native projects themselves ARE committed)
+*.apk
+*.aab
+*.ipa
+/ios/App/Pods/
+/ios/App/App/public/
+/android/app/src/main/assets/public/
+DerivedData/

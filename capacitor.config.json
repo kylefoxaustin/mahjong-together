@@ -1,0 +1,10 @@
+{
+  "appId": "com.kylefoxaustin.mahjongtogether",
+  "appName": "Mahjong, Together",
+  "webDir": "capacitor/www",
+  "server": {
+    "url": "https://mahjong-together-six.vercel.app",
+    "cleartext": false
+  },
+  "backgroundColor": "#022c22"
+}

@@ -1,0 +1,27 @@
+<!doctype html>
+<!--
+  Fallback page bundled into the native app. At runtime the app loads the live
+  site (capacitor.config.json → server.url), so this only shows if that can't be
+  reached (e.g. no network on first launch). Keep it gentle and on-brand.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Mahjong, Together</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #022c22; color: #fcd34d;
+        font-family: -apple-system, system-ui, Arial, sans-serif; }
+      .wrap { height: 100%; display: flex; flex-direction: column; align-items: center;
+        justify-content: center; text-align: center; padding: 24px; }
+      h1 { font-size: 1.8rem; margin: 0 0 8px; }
+      p { color: #a7f3d0; font-size: 1.1rem; max-width: 22rem; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Mahjong, Together</h1>
+      <p>Getting the table ready… If this stays up, please check your internet connection and reopen the app.</p>
+    </div>
+  </body>
+</html>
