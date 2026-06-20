@@ -50,6 +50,7 @@ const DIFFICULTY = {
 };
 const DIFF_ORDER = ["easy", "normal", "hard", "advanced"];
 const DIFF_KEY = "mahjong-together:difficulty"; // remembers her last choice across visits
+const FAST_KEY = "mahjong-together:fast"; // "Quick play" vs realistic opponent pacing
 const HINTS_KEY = "mahjong-together:hints"; // remembers the on-screen-hints toggle
 const LINE_KEY = "mahjong-together:line"; // remembers the winning line she chases
 
@@ -260,8 +261,10 @@ export default function MahjongCoach() {
   const [dragId, setDragId] = useState(null); // tile currently being dragged (for styling)
   const [savedGame, setSavedGame] = useState(null); // a resumable auto-saved game, surfaced as "Continue" on the menu
   const [isStandalone, setIsStandalone] = useState(false); // true when already installed as an app (hides the install tip)
+  const [fastMode, setFastMode] = useState(false); // "Quick play": brisk bot turns instead of realistic 5–45s thinking
   const hydratedRef = useRef(false); // becomes true once a saved game has been restored (or none found)
   const botTimersRef = useRef([]); // pending setTimeout ids for the staged opponent turns
+  const fastForwardRef = useRef(null); // set during a bots round so "Skip ahead" can fast-forward it
   const clearBotTimers = () => { botTimersRef.current.forEach(clearTimeout); botTimersRef.current = []; };
 
   const { speak, stop } = useSpeech();
@@ -347,6 +350,7 @@ export default function MahjongCoach() {
       if (linePref && LINES[linePref]) setLine(linePref);
       const hp = localStorage.getItem(HINTS_KEY);
       if (hp === "0") setHintsOn(false);
+      if (localStorage.getItem(FAST_KEY) === "1") setFastMode(true);
       const raw = localStorage.getItem(SAVE_KEY);
       const s = raw && JSON.parse(raw);
       const terminal = s && ["won", "botwon", "wallgame"].includes(s.phase);
@@ -433,6 +437,12 @@ export default function MahjongCoach() {
   const chooseDifficulty = useCallback((key) => {
     setDifficulty(key);
     try { localStorage.setItem(DIFF_KEY, key); } catch { /* ignore */ }
+  }, []);
+
+  // "Quick play" vs realistic opponent pacing (remembered across visits).
+  const setFast = useCallback((on) => {
+    setFastMode(on);
+    try { localStorage.setItem(FAST_KEY, on ? "1" : "0"); } catch { /* ignore */ }
   }, []);
 
   // Pick (and remember) which winning line she's chasing.
@@ -606,16 +616,17 @@ export default function MahjongCoach() {
     setWall(w); setBotHands(bots); setDiscards(disc);
     setSelected([]); setCallable(null); setBotDiscards([null, null, null]);
     setPhase("bots");
-    say("Let's see what the other players do.");
+    say(fastMode
+      ? "Let's see what the other players do."
+      : "The other players are taking their turns. Take all the time you need — or press “Skip ahead” to hurry them along.");
 
-    const STEP = DIFFICULTY[difficulty].pace ?? 1300; // slow enough to follow on gentle levels
     const lastReveal = winner >= 0 ? winner : 2;
-    for (let i = 0; i <= lastReveal; i++) {
-      botTimersRef.current.push(setTimeout(() => {
-        setBotDiscards((bd) => { const n = [...bd]; n[i] = tosses[i]; return n; });
-      }, STEP * (i + 1)));
-    }
-    botTimersRef.current.push(setTimeout(() => {
+    const reveal = (i) => setBotDiscards((bd) => { const n = [...bd]; n[i] = tosses[i]; return n; });
+
+    // Resolve the round once the opponents have discarded: detect a win, an
+    // opponent's claim, or hand the turn back to her (offering any tile she can take).
+    const resolve = () => {
+      fastForwardRef.current = null; // round's over — disarm "Skip ahead"
       if (winner >= 0) {
         setPhase("botwon");
         say(`${SEAT_NAMES[winner]} finished their hand this round — nicely played by them! You'll get the next one. Press "Play again" when you're ready.`);
@@ -665,8 +676,40 @@ export default function MahjongCoach() {
         setPhase("draw");
         say("Your turn again — take a tile when you're ready.");
       }
-    }, STEP * (lastReveal + 2)));
-  }, [wall, discards, botHands, exposed, lockedPair, difficulty, mode, line, endWallGame, say]);
+    };
+
+    // "Skip ahead" fast-forwards the rest of this round: cancel the pending
+    // ponder timers, reveal every discard at once, and resolve immediately.
+    fastForwardRef.current = () => {
+      clearBotTimers();
+      for (let i = 0; i <= lastReveal; i++) reveal(i);
+      resolve();
+    };
+
+    if (fastMode) {
+      // Quick play: a brisk, steady cadence (per-level pace).
+      const STEP = DIFFICULTY[difficulty].pace ?? 1300;
+      for (let i = 0; i <= lastReveal; i++) {
+        botTimersRef.current.push(setTimeout(() => reveal(i), STEP * (i + 1)));
+      }
+      botTimersRef.current.push(setTimeout(resolve, STEP * (lastReveal + 2)));
+    } else {
+      // Realistic: each opponent ponders a random 5–45 seconds before discarding,
+      // one after another, like real people at the table.
+      let at = 0;
+      for (let i = 0; i <= lastReveal; i++) {
+        at += 5000 + Math.random() * 40000;
+        const when = at;
+        botTimersRef.current.push(setTimeout(() => reveal(i), when));
+      }
+      botTimersRef.current.push(setTimeout(resolve, at + 900));
+    }
+  }, [wall, discards, botHands, exposed, lockedPair, difficulty, mode, line, fastMode, endWallGame, say]);
+
+  // "Skip ahead" button during the opponents' turns — hurry them without waiting.
+  const skipBots = useCallback(() => {
+    if (fastForwardRef.current) fastForwardRef.current();
+  }, []);
 
   const drawTile = () => {
     if (phase !== "draw") return;
@@ -1028,6 +1071,26 @@ export default function MahjongCoach() {
             </div>
           </div>
 
+          <div className="mb-8 text-left">
+            <div className="text-emerald-200 text-sm font-bold uppercase tracking-widest mb-2 text-center">How fast do the other players go?</div>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { on: false, label: "Realistic", blurb: "They pause to think, like real people. No rush — you can skip the wait anytime." },
+                { on: true, label: "Quick play", blurb: "They play right along, so the game moves fast." },
+              ].map((opt) => {
+                const active = fastMode === opt.on;
+                return (
+                  <button key={opt.label} onClick={() => setFast(opt.on)} aria-pressed={active}
+                    className={`rounded-2xl p-3 border-4 transition motion-reduce:transition-none focus:outline-none focus:ring-4 focus:ring-amber-300
+                      ${active ? "bg-amber-400 border-amber-300 text-emerald-950" : "bg-emerald-800/60 border-emerald-700 text-emerald-100 hover:bg-emerald-700/60"}`}>
+                    <div className="text-lg font-black">{opt.label}</div>
+                    <div className={`text-xs font-semibold mt-1 ${active ? "text-emerald-900" : "text-emerald-300"}`}>{opt.blurb}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="grid sm:grid-cols-2 gap-4">
             <button onClick={() => { setMode("learn"); startGame(true); }}
               className="rounded-3xl bg-stone-50 text-emerald-950 p-6 text-left shadow-2xl transition hover:-translate-y-1 motion-reduce:transition-none motion-reduce:hover:translate-y-0 focus:outline-none focus:ring-4 focus:ring-amber-400">
@@ -1192,7 +1255,7 @@ export default function MahjongCoach() {
                   </div>
                 </div>
               ) : (
-                <div className="text-sm font-semibold text-emerald-400/70 flex items-center" style={{ height: 92 }}>waiting…</div>
+                <div className="text-sm font-semibold text-emerald-300 flex items-center animate-pulse motion-reduce:animate-none" style={{ height: 92 }}>{phase === "bots" ? "thinking…" : "waiting…"}</div>
               )}
             </div>
           );
@@ -1357,6 +1420,14 @@ export default function MahjongCoach() {
         <div className="w-full max-w-6xl mx-auto flex gap-3 mb-4">
           <button onClick={takeCall} className="flex-1 rounded-2xl bg-amber-500 text-emerald-950 text-2xl font-black py-5 ring-4 ring-amber-300 animate-pulse motion-reduce:animate-none focus:outline-none focus:ring-4 focus:ring-amber-200">Take it ({callable?.label})</button>
           <button onClick={leaveCall} className="flex-1 rounded-2xl bg-emerald-700 text-white text-2xl font-bold py-5 focus:outline-none focus:ring-4 focus:ring-amber-300">Leave it</button>
+        </div>
+      ) : phase === "bots" ? (
+        <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row items-center gap-3 mb-4">
+          <span className="flex-1 text-emerald-100 text-lg font-semibold text-center sm:text-left">The other players are thinking. No rush — take your time.</span>
+          <button onClick={skipBots}
+            className="rounded-2xl bg-emerald-700 hover:bg-emerald-600 text-white text-xl font-bold px-8 py-4 focus:outline-none focus:ring-4 focus:ring-amber-300">
+            Skip ahead ▶▶
+          </button>
         </div>
       ) : (
         <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row gap-3 mb-4">
