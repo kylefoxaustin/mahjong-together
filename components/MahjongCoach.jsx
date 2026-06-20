@@ -20,10 +20,10 @@ const SEAT_NAMES = ["Left player", "Across", "Right player"];
 // Mahjong on a discard)? Gated so Easy/Normal stay gentle and only Hard/Advanced
 // introduce that real threat.
 const DIFFICULTY = {
-  easy:     { label: "Easy",     blurb: "I help you a lot, and the others play simply.", herAssist: true,  botAssist: 0,   claimWin: false },
-  normal:   { label: "Normal",   blurb: "Everyone draws their own tiles; the others play simply.", herAssist: false, botAssist: 0,   claimWin: false },
-  hard:     { label: "Hard",     blurb: "The other players are sharper and can win off your discards.", herAssist: false, botAssist: 0.6, claimWin: true },
-  advanced: { label: "Advanced", blurb: "The other players are masters — a real challenge!", herAssist: false, botAssist: 1,   claimWin: true },
+  easy:     { label: "Easy",     blurb: "I help you a lot, and the others play simply.", herAssist: true,  botAssist: 0,   claimWin: false, botClaims: false },
+  normal:   { label: "Normal",   blurb: "Everyone draws their own tiles; the others play simply.", herAssist: false, botAssist: 0,   claimWin: false, botClaims: false },
+  hard:     { label: "Hard",     blurb: "The other players are sharper — they grab discards and can win off yours.", herAssist: false, botAssist: 0.6, claimWin: true, botClaims: true },
+  advanced: { label: "Advanced", blurb: "The other players are masters — a real challenge!", herAssist: false, botAssist: 1,   claimWin: true, botClaims: true },
 };
 const DIFF_ORDER = ["easy", "normal", "hard", "advanced"];
 const DIFF_KEY = "mahjong-together:difficulty"; // remembers her last choice across visits
@@ -523,9 +523,39 @@ export default function MahjongCoach() {
       herConcealed.forEach((t) => { if (!t.isJoker) counts[t.key] = (counts[t.key] || 0) + 1; });
       const claim = tosses.find((p) => p && !p.isJoker && counts[p.key] >= 2) || null;
       if (claim) {
+        const cfg = DIFFICULTY[difficulty];
+        const di = tosses.indexOf(claim); // the opponent who discarded it
+        const keyOf = (bh, key) => bh.filter((t) => t.key === key && !t.isJoker).length;
+        // Her own winning claim has priority over any opponent exposure (Mahjong
+        // beats an exposure), and we always protect the human's win.
+        const herWin = isWinningHand([...herConcealed, claim, ...exposed.flat(), ...(lockedPair || [])]);
+        // (a) Otherwise an opponent may declare Mahjong on it (Hard/Advanced).
+        if (!herWin && cfg.claimWin) {
+          const wb = bots.findIndex((bh, i) => i !== di && isWinningHand([...bh, claim]));
+          if (wb >= 0) {
+            setBotHands((hs) => hs.map((bh, i) => (i === wb ? [...bh, claim] : bh)));
+            setDiscards((d) => d.filter((x) => x !== claim));
+            setPhase("botwon");
+            say(`${SEAT_NAMES[wb]} called the ${claim.label} to complete their hand — Mahjong for them! You'll get the next one. Press “Play again” when you're ready.`);
+            return;
+          }
+        }
+        // (b) Or an opponent grabs it for a set before she can (turn priority).
+        if (!herWin && cfg.botClaims) {
+          const tk = bots.findIndex((bh, i) => i !== di && keyOf(bh, claim.key) >= 2);
+          if (tk >= 0) {
+            setDiscards((d) => d.filter((x) => x !== claim)); // taken off the table
+            setPhase("draw");
+            say(`${SEAT_NAMES[tk]} grabbed the ${claim.label} for a set before you could. Your turn — take a tile when you're ready.`);
+            return;
+          }
+        }
+        // (c) It's hers to take.
         setCallable(claim);
         setPhase("call");
-        say(`That ${claim.label} would finish a set for you! Press "Take it" to grab it, or "Leave it" to wait.`);
+        say(herWin
+          ? `The ${claim.label} completes your hand! Others wanted it, but a winning claim comes first. Press “Take it”, then “I think I won!”.`
+          : `That ${claim.label} would finish a set for you! Press “Take it” to grab it, or “Leave it” to wait.`);
       } else if (w.length === 0) {
         endWallGame(); // the wall ran dry and nobody finished
       } else {
@@ -533,7 +563,7 @@ export default function MahjongCoach() {
         say("Your turn again — take a tile when you're ready.");
       }
     }, STEP * (lastReveal + 2)));
-  }, [wall, discards, botHands, difficulty, mode, endWallGame, say]);
+  }, [wall, discards, botHands, exposed, lockedPair, difficulty, mode, endWallGame, say]);
 
   const drawTile = () => {
     if (phase !== "draw") return;

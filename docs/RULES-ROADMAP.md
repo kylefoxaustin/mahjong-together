@@ -72,7 +72,13 @@ Sources: see bottom.
 - ✅ **#1 Wall game** — finite wall; gentle "wall game" draw when tiles run out.
 - ✅ **#2 Kong** — win goal expanded to **4 sets of three OR four + a pair**;
   "Make this kong" + replacement draw; calling a kong off a discard (hold 3).
-- ⏭️ Next in sequence: **#3 opponents win off her discard**, then **#4 claiming + priority**.
+- ✅ **#3 Opponents win off her discard** (Hard/Advanced; gentle on Easy/Normal).
+- ✅ **#4 Claiming + priority (scoped)** — when she's about to grab a discard, an
+  opponent may contest it: her winning claim is always protected; otherwise an
+  opponent may declare Mahjong on it, or grab it for a set before her (Hard/
+  Advanced via `claimWin`/`botClaims`). Easy/Normal stay contest-free.
+- ⏭️ Next: **#5 joker exchange**, then **#6 Charleston completeness**; plus the
+  "let her choose the winning line" request.
 
 ### NEW request (from Kyle): let HER choose the winning line
 
