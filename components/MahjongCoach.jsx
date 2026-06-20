@@ -276,6 +276,13 @@ export default function MahjongCoach() {
   // She can declare a win only when she actually holds one (her 14 tiles), and
   // it's her turn — she decides WHEN, the game never finishes it for her.
   const canDeclareWin = mode === "learn" && phase === "discard" && isWinningHand(allTiles);
+  // Joker exchange: on her turn, a Joker in one of her locked sets can be
+  // reclaimed if she holds the real tile it stands in for.
+  const myTurn = phase === "draw" || phase === "discard";
+  const anyJokerRedeemable = myTurn && exposed.some((g) => {
+    const realKey = g.find((t) => !t.isJoker)?.key;
+    return realKey && g.some((t) => t.isJoker) && hand.some((t) => t.key === realKey && !t.isJoker);
+  });
   const say = useCallback((msg) => { setCoach(msg); if (voiceOn) speak(msg); }, [voiceOn, speak]);
 
   // Voice on/off. Turning it ON speaks the current coaching line immediately
@@ -710,6 +717,22 @@ export default function MahjongCoach() {
     }
   };
 
+  // Joker exchange — swap her matching real tile into a locked set and take the
+  // Joker back into her hand (a real NMJL rule; Jokers are wild and valuable).
+  const redeemJoker = (groupIndex, jokerId) => {
+    const group = exposed[groupIndex];
+    if (!group) return;
+    const realKey = group.find((t) => !t.isJoker)?.key;
+    const natural = hand.find((t) => t.key === realKey && !t.isJoker);
+    const jokerInGroup = group.find((t) => t.id === jokerId && t.isJoker);
+    if (!realKey || !natural || !jokerInGroup) return;
+    setExposed(exposed.map((g, i) => (i === groupIndex ? g.map((t) => (t.id === jokerId ? natural : t)) : g)));
+    setHand([...hand.filter((t) => t.id !== natural.id), jokerInGroup]);
+    setSelected([]);
+    setHighlightIds([]);
+    say(`Nice swap — your ${natural.label} goes into that set, and the Joker is back in your hand to use anywhere.`);
+  };
+
   // "Make this my pair" — commit two matching tiles as her pair (the win needs
   // exactly one). Like locking a set, it just sets them aside, safe.
   const makePair = () => {
@@ -1030,11 +1053,19 @@ export default function MahjongCoach() {
         <div className="w-full max-w-6xl mx-auto mb-3">
           <div className="text-xs uppercase tracking-widest text-emerald-300 mb-2 font-bold">Locked in &amp; safe</div>
           <div className="flex flex-wrap gap-3 items-end">
-            {exposed.map((m, i) => (
-              <div key={`set${i}`} className="flex gap-1.5">
-                {m.map((t) => <Tile key={t.id} tile={t} small dim />)}
-              </div>
-            ))}
+            {exposed.map((m, i) => {
+              const realKey = m.find((t) => !t.isJoker)?.key;
+              const redeemable = myTurn && realKey && m.some((t) => t.isJoker) && hand.some((t) => t.key === realKey && !t.isJoker);
+              return (
+                <div key={`set${i}`} className="flex gap-1.5">
+                  {m.map((t) =>
+                    t.isJoker && redeemable
+                      ? <Tile key={t.id} tile={t} small highlight={hintsOn} onClick={() => redeemJoker(i, t.id)} />
+                      : <Tile key={t.id} tile={t} small dim />,
+                  )}
+                </div>
+              );
+            })}
             {lockedPair && (
               <div className="flex flex-col items-center gap-1">
                 <div className="flex gap-1.5">{lockedPair.map((t) => <Tile key={t.id} tile={t} small dim />)}</div>
@@ -1042,6 +1073,11 @@ export default function MahjongCoach() {
               </div>
             )}
           </div>
+          {anyJokerRedeemable && (
+            <p className="text-emerald-300 text-xs sm:text-sm mt-2">
+              💡 Tap a glowing Joker to take it back — your matching tile goes into the set, and the Joker returns to your hand.
+            </p>
+          )}
         </div>
       )}
 
