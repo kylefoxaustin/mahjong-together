@@ -1158,13 +1158,14 @@ export default function MahjongCoach() {
           )}
         </div>
         {/* Single-row rack lined up in front of the player (traditional layout).
-            Tiles flex to share the full width, so the whole row is visible and
-            as large as the iPad allows. She can drag to rearrange; new draws
-            append to the end and "Tidy up" re-sorts on demand. */}
+            Fixed-size tiles in a `w-max mx-auto` row: centered when they fit,
+            and when they overflow the row starts at the left edge (margins
+            collapse to 0) so the LEFTMOST tile is always reachable as she
+            scrolls right. She can drag to rearrange; "Tidy up" re-sorts. */}
         <div className="overflow-x-auto px-1 py-1">
-          <div ref={rackRef} className="flex flex-nowrap gap-1.5 w-full justify-center">
+          <div ref={rackRef} className="flex flex-nowrap gap-1.5 w-max mx-auto px-1">
             {hand.map((t) => (
-              <Tile key={t.id} tile={t} selected={selected.includes(t.id)} fill
+              <Tile key={t.id} tile={t} selected={selected.includes(t.id)}
                 highlight={hintsOn && (hintIds.has(t.id) || highlightIds.includes(t.id))}
                 draggable={canArrange}
                 dragging={dragId === t.id}
