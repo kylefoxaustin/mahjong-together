@@ -501,10 +501,21 @@ export default function MahjongCoach() {
   // Plain-English summary of exactly what she can do right now, so the coach
   // only ever suggests real on-screen actions (CLAUDE.md §12 — no impossible
   // advice). Kept terse; it's context for the model, not read aloud.
-  const actionsForPhase = useCallback((p = phase) => {
-    const makeHint = pairsLine ? "" : ` She may also tap matching tiles and press "Make this set", "Make this kong", or "Make this my pair".`;
+  const actionsForPhase = useCallback((p = phase, formable = {}) => {
+    // Only mention "Make this…" for groups she can ACTUALLY form right now (she
+    // has two/three matching tiles). With no matches, say so plainly so the coach
+    // never tells her to "find a pair" when there isn't one.
+    let makeHint = "";
+    if (!pairsLine) {
+      const opts = [];
+      if (formable.hasReadySet) opts.push(`tap the three or four matching tiles and press "Make this set" / "Make this kong"`);
+      if (formable.hasPair) opts.push(`tap the two matching tiles and press "Make this my pair"`);
+      makeHint = opts.length
+        ? ` She could also ${opts.join(", or ")}.`
+        : ` She has NO matching tiles to make a set or pair yet, so do NOT suggest finding or making one — her move is simply to ${p === "discard" ? "let a tile go" : "draw a tile"}.`;
+    }
     if (p === "draw") return `It is her turn to draw. She can press "Take a tile" to draw from the wall.${makeHint}`;
-    if (p === "discard") return `She has ALREADY drawn her tile, so she canNOT take another right now — the "Take a tile" button is disabled. Her only move is to let one tile go: tap a tile and press "Let this tile go".${makeHint} Do NOT tell her to take or draw a tile.`;
+    if (p === "discard") return `She has ALREADY drawn her tile, so she canNOT take another right now — the "Take a tile" button is disabled. Her main move is to let one tile go: tap a tile and press "Let this tile go".${makeHint} Do NOT tell her to take or draw a tile.`;
     if (p === "call") return `A tile on the table (${callable?.label}) would finish a set. She can press "Take it" or "Leave it". Do NOT tell her to draw.`;
     return `It's a quiet moment; she's getting set up.`;
   }, [phase, callable, pairsLine]);
@@ -540,7 +551,8 @@ export default function MahjongCoach() {
         ? `A tile on the table she can TAKE right now: ${callable.label} (she presses "Take it").`
         : `No discarded tile can be taken right now — taking only happens the moment it's offered.`,
     ]).filter(Boolean).join("\n");
-    const rules = `These facts are exact and come from the game. Do NOT count her tiles or invent any numbers, and only ever name tiles that appear in the facts above — never a tile she doesn't have. Never tell her to take/grab a discarded tile unless the facts say one can be taken right now. Suggest ONLY actions that are possible right now. What she can do right now: ${actionsForPhase(curPhase)}`;
+    const formable = { hasReadySet: f.readySets.length > 0, hasPair: f.pairs.length > 0 };
+    const rules = `These facts are exact and come from the game. Do NOT count her tiles or invent any numbers, and only ever name tiles that appear in the facts above — never a tile she doesn't have. Do NOT tell her to "look for", "find", or "make" a pair or set unless the facts list tiles she ALREADY has two or three of; if she has none, the right move is simply to draw or let a tile go. Never tell her to take/grab a discarded tile unless the facts say one can be taken right now. Suggest ONLY actions that are possible right now. What she can do right now: ${actionsForPhase(curPhase, formable)}`;
     const userText = question
       ? `${facts}\n\n${rules}\n\nShe asked out loud: "${question}"\n\nAnswer her kindly and simply, suggesting only things she can do right now.`
       : `${facts}\n\n${rules}\n\nGive her ONE gentle suggestion for her next move.`;
