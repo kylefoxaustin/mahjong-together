@@ -5,6 +5,7 @@ import { Volume2, VolumeX, Mic, HelpCircle, RotateCcw, ArrowRight, BadgeCheck, L
 import { buildWall, sortHand, makeTile, isWinningHand, localHint, isValidSet, isValidKong, pickAssistedDrawIndex, coachFacts, chooseDiscard } from "@/lib/tiles";
 import { buildSystemPrompt, callCoach } from "@/lib/coach";
 import { LINES, LINE_ORDER, winsLine, lineProgress } from "@/lib/lines";
+import { useAutoUpdate } from "./useAutoUpdate";
 
 // Where the in-progress game is auto-saved on her device (localStorage). Bump
 // the version suffix if the saved shape ever changes, to avoid restoring stale data.
@@ -378,6 +379,11 @@ export default function MahjongCoach() {
     } catch { /* corrupt or unavailable storage — start fresh */ }
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  // Auto-refresh to a freshly-deployed version, but never mid-move: it's safe to
+  // reload when she's not in an active game (or a game just ended).
+  const safeToReload = screen !== "game" || phase === "won" || phase === "botwon" || phase === "wallgame";
+  useAutoUpdate(safeToReload);
 
   // Auto-save the in-progress game whenever it changes (no buttons, no prompts).
   // The first run is skipped so it can't clobber the save before restore lands.
